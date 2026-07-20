@@ -1,0 +1,6 @@
+location_name,location_address,location_city,location_district,location_ward,contact_person,contact_phone,contact_email,installation_date,installation_time_start,installation_time_end,estimated_hours,product_info,work_description,notes
+Chi nhánh Quận 1,123 Nguyễn Huệ,TP.HCM,Quận 1,Phường Bến Nghé,Nguyễn Văn A,0901234567,nguyenvana@example.com,2024-02-01,08:00,12:00,4,Bảng hiệu LED 3x2m chữ nổi Inox,Lắp đặt bảng hiệu tầng 1 mặt tiền,Cần thang nâng người
+Chi nhánh Quận 3,456 Lê Văn Sỹ,TP.HCM,Quận 3,Phường 12,Trần Thị B,0912345678,tranthib@example.com,2024-02-02,13:00,17:00,4,Kệ trưng bày 2x3m gỗ MDF,Lắp đặt kệ tại showroom tầng 1,Sàn gạch men phẳng
+Chi nhánh Quận 5,789 Trần Hưng Đạo,TP.HCM,Quận 5,Phường 7,Lê Văn C,0923456789,levanc@example.com,2024-02-03,08:00,16:00,8,Booth quảng cáo 3x3m + backdrop,Lắp booth tại trung tâm thương mại,Có điện 220V sẵn
+Chi nhánh Thủ Đức,321 Võ Văn Ngân,TP.HCM,Thủ Đức,Phường Linh Chiểu,Phạm Thị D,0934567890,phamthid@example.com,2024-02-04,09:00,15:00,6,Bảng hiệu hộp đèn 2x1.5m,Lắp bảng hiệu tầng 2 nội bộ,Cần khoan tường
+Chi nhánh Bình Thạnh,654 Xô Viết Nghệ Tĩnh,TP.HCM,Bình Thạnh,Phường 25,Hoàng Văn E,0945678901,hoangvane@example.com,2024-02-05,10:00,14:00,4,Standee 0.8x1.8m composite,Đặt standee trong cửa hàng,Không cần lắp đặt phức tạp

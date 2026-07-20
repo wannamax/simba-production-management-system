@@ -1,0 +1,71 @@
+name: Release 2.2.0
+on:
+  push:
+    tags: ['v2.2.0']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: release-2.2.0
+  cancel-in-progress: false
+jobs:
+  test-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build test images
+        run: |
+          docker build -t simba-pms-backend:ci ./backend
+          docker build -t simba-pms-web:ci ./frontend
+      - name: Start clean stack and run migrations
+        run: docker compose -f compose.ci.yml up -d --wait
+      - name: Verify schema migration
+        run: docker compose -f compose.ci.yml exec -T db psql -U pms_app -d production_management -c "SELECT * FROM schema_migrations;"
+      - name: Verify frontend and API
+        run: |
+          docker compose -f compose.ci.yml exec -T web wget -qO- http://127.0.0.1/health
+          docker compose -f compose.ci.yml exec -T backend node -e "fetch('http://127.0.0.1:3000/health').then(async r=>{if(!r.ok)process.exit(1);console.log(await r.text())})"
+      - name: Test import/export Excel
+        run: docker compose -f compose.ci.yml exec -T -e TEST_BASE_URL=http://web backend node tests/integration-smoke.js
+      - name: Test backup and restore
+        run: |
+          docker compose -f compose.ci.yml exec -T db pg_dump -U pms_app -Fc production_management > /tmp/pms.dump
+          test -s /tmp/pms.dump
+          docker compose -f compose.ci.yml exec -T db createdb -U pms_app restore_test
+          cat /tmp/pms.dump | docker compose -f compose.ci.yml exec -T db pg_restore -U pms_app -d restore_test --no-owner
+          docker compose -f compose.ci.yml exec -T db psql -U pms_app -d restore_test -c "SELECT count(*) FROM schema_migrations;"
+      - if: always()
+        run: docker compose -f compose.ci.yml logs --no-color && docker compose -f compose.ci.yml down -v
+  publish:
+    needs: test-amd64
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+          - name: web
+            context: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.2.0
+            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.2
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: production_management
+      POSTGRES_USER: pms_app
+      POSTGRES_PASSWORD: ci_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pms_app -d production_management"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  backend:
+    image: simba-pms-backend:ci
+    environment:
+      NODE_ENV: test
+      PORT: 3000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: production_management
+      DB_USER: pms_app
+      DB_PASSWORD: ci_password
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  web:
+    image: simba-pms-web:ci
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

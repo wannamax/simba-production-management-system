@@ -1,0 +1,464 @@
+# 🤔 Phân tích & Tư vấn Giải pháp: Quy trình Sản xuất vs Lắp đặt/Giao hàng
+
+## 📊 PHÂN TÍCH YÊU CẦU
+
+### Hiện trạng:
+```
+Task có 3 loại:
+├─ Lắp đặt → Cần: Danh sách địa điểm ✅
+├─ Giao hàng → Cần: Danh sách địa điểm giao ✅
+└─ Sản xuất → Cần: QUY TRÌNH (Workflow) ❓
+```
+
+### Đặc điểm Sản xuất:
+```
+1. Có các GIAI ĐOẠN tuần tự:
+   - Thiết kế → Sản xuất mẫu → Duyệt mẫu → Sản xuất hàng loạt
+   
+2. Mỗi giai đoạn có NHIỀU BƯỚC:
+   - Sản xuất hàng loạt:
+     ├─ Gia công khung sườn
+     ├─ Lắp ráp linh kiện
+     ├─ Sơn/Phủ bề mặt
+     ├─ Lắp đặt điện/đèn
+     └─ Kiểm tra chất lượng
+     
+3. Mỗi bước có:
+   - Thời gian ước tính
+   - Nhân sự phụ trách
+   - Vật tư cần dùng
+   - Tiêu chí hoàn thành
+   - Phê duyệt (QC)
+```
+
+---
+
+## 💡 3 PHƯƠNG ÁN GIẢI PHÁP
+
+### **PHƯƠNG ÁN 1: Workflow Template (Khuyến nghị) ⭐⭐⭐⭐⭐**
+
+#### Ý tưởng:
+```
+Task Sản xuất = Template Workflow có sẵn
+Người dùng chọn template → Tự động tạo các bước
+```
+
+#### Cấu trúc Database:
+
+```
+workflow_templates (Mẫu quy trình)
+├─ id
+├─ template_name: "Sản xuất Bảng hiệu LED"
+├─ template_type: "Sản xuất"
+└─ is_default
+
+workflow_template_stages (Giai đoạn trong template)
+├─ id
+├─ template_id
+├─ stage_name: "Thiết kế", "Sản xuất mẫu", "Sản xuất hàng loạt"
+├─ stage_order: 1, 2, 3
+├─ is_approval_required: true/false
+└─ estimated_days
+
+workflow_template_steps (Bước trong giai đoạn)
+├─ id
+├─ stage_id
+├─ step_name: "Gia công khung sườn", "Lắp ráp"
+├─ step_order: 1, 2, 3
+├─ estimated_hours
+├─ required_skills: ['Thợ hàn', 'Thợ sơn']
+└─ quality_checklist
+
+---
+
+Khi tạo Task Sản xuất:
+task_workflows (Instance của workflow)
+├─ id
+├─ task_id
+└─ template_id
+
+task_workflow_stages (Giai đoạn thực tế)
+├─ id
+├─ task_workflow_id
+├─ stage_name (copy từ template)
+├─ status: 'Chưa bắt đầu', 'Đang làm', 'Chờ duyệt', 'Hoàn thành'
+├─ actual_start_date
+├─ actual_end_date
+└─ approved_by, approved_at
+
+task_workflow_steps (Bước thực tế)
+├─ id
+├─ task_stage_id
+├─ step_name
+├─ assigned_employee_id
+├─ status
+├─ progress %
+├─ actual_hours
+└─ quality_check_passed
+```
+
+#### Ưu điểm:
+- ✅ Chuẩn hóa quy trình
+- ✅ Dễ nhân bản, tái sử dụng
+- ✅ Có thể tạo nhiều template khác nhau
+- ✅ Dễ quản lý, theo dõi tiến độ
+- ✅ Có thể customize cho từng dự án
+
+#### Nhược điểm:
+- ⚠️ Setup ban đầu mất thời gian (tạo templates)
+- ⚠️ Database phức tạp hơn
+
+---
+
+### **PHƯƠNG ÁN 2: Checklist đơn giản ⭐⭐⭐**
+
+#### Ý tưởng:
+```
+Task Sản xuất = Danh sách các bước cần làm (như To-do list)
+Không có concept "Giai đoạn"
+```
+
+#### Cấu trúc Database:
+
+```
+production_steps (Bước sản xuất)
+├─ id
+├─ task_id
+├─ step_name: "Thiết kế", "Gia công khung"
+├─ step_order: 1, 2, 3
+├─ description
+├─ assigned_employee_id
+├─ status: 'Todo', 'Doing', 'Done'
+├─ progress %
+├─ estimated_hours
+├─ actual_hours
+├─ due_date
+├─ completed_at
+└─ notes
+```
+
+#### UI giống Trello:
+```
+[Todo]        [Doing]       [Done]
+┌──────────┐  ┌──────────┐  ┌──────────┐
+│ Thiết kế │  │ Gia công │  │ Sơn khung│
+│ 3D       │  │ khung    │  │          │
+└──────────┘  └──────────┘  └──────────┘
+```
+
+#### Ưu điểm:
+- ✅ Đơn giản, dễ implement
+- ✅ Linh hoạt, dễ thêm/xóa/sửa bước
+- ✅ Người dùng dễ hiểu
+
+#### Nhược điểm:
+- ❌ Không có khái niệm "Giai đoạn" → khó quản lý quy trình lớn
+- ❌ Không có approval workflow
+- ❌ Khó standardize
+
+---
+
+### **PHƯƠNG ÁN 3: Hybrid - Kết hợp cả 2 ⭐⭐⭐⭐**
+
+#### Ý tưởng:
+```
+Có Template mặc định NHƯNG cho phép customize
+```
+
+#### Flow:
+```
+1. Chọn "Sản xuất" → Hiện dropdown chọn template:
+   - Bảng hiệu LED
+   - Kệ trưng bày gỗ
+   - Booth triển lãm
+   - [Tùy chỉnh]
+
+2. Nếu chọn template → Load sẵn các giai đoạn/bước
+   ├─ Cho phép thêm/xóa/sửa bước
+   └─ Cho phép thay đổi thứ tự
+
+3. Nếu chọn "Tùy chỉnh" → Tạo từ đầu
+```
+
+#### Cấu trúc Database:
+```
+Giữ nguyên cấu trúc Phương án 1
+NHƯNG thêm:
+
+task_workflow_steps:
+├─ is_custom: true/false
+└─ can_skip: true/false
+
+Cho phép:
+- Insert custom steps
+- Reorder steps
+- Mark optional steps
+```
+
+---
+
+## 🎯 SO SÁNH 3 PHƯƠNG ÁN
+
+| Tiêu chí | PA1: Template | PA2: Checklist | PA3: Hybrid |
+|----------|---------------|----------------|-------------|
+| **Độ phức tạp code** | Cao | Thấp | Trung bình |
+| **Tính chuẩn hóa** | Cao | Thấp | Cao |
+| **Tính linh hoạt** | Trung bình | Cao | Rất cao |
+| **Phù hợp quy mô** | Vừa→Lớn | Nhỏ | Tất cả |
+| **Thời gian dev** | 3-4 tuần | 1 tuần | 2-3 tuần |
+| **Dễ sử dụng** | Trung bình | Cao | Cao |
+| **Approval workflow** | ✅ | ❌ | ✅ |
+| **Báo cáo chi tiết** | ✅ | ⚠️ | ✅ |
+
+---
+
+## 🤔 CÂU HỎI ĐỂ QUYẾT ĐỊNH
+
+### 1. **Quy trình sản xuất có cố định không?**
+
+**Nếu CÓ:** 
+- → Chọn **Phương án 1 (Template)**
+- VD: Bảng hiệu LED luôn đi qua: Thiết kế → Mẫu → Duyệt → Sản xuất loạt
+
+**Nếu KHÔNG:** 
+- → Chọn **Phương án 2 (Checklist)** hoặc **3 (Hybrid)**
+- VD: Mỗi sản phẩm khác nhau, quy trình khác nhau
+
+---
+
+### 2. **Cần phê duyệt giữa các giai đoạn không?**
+
+**VD:** Sau khi làm mẫu → Cần quản lý duyệt → Mới được sản xuất loạt
+
+**Nếu CẦN:**
+- → **Phương án 1** hoặc **3** (có approval workflow)
+
+**Nếu KHÔNG:**
+- → **Phương án 2** đủ dùng
+
+---
+
+### 3. **Muốn quản lý đến mức độ nào?**
+
+**Mức 1 - Cơ bản:** Biết công việc nào đã xong, chưa xong
+- → **Phương án 2**
+
+**Mức 2 - Chi tiết:** Biết từng giai đoạn, từng bước, tiến độ %
+- → **Phương án 1** hoặc **3**
+
+**Mức 3 - Rất chi tiết:** + QC, vật tư, chi phí từng bước
+- → **Phương án 1** + bổ sung tables vật tư, QC
+
+---
+
+### 4. **Số lượng loại sản phẩm?**
+
+**Ít (1-3 loại):** 
+- → **Phương án 2** hoặc **1** với template cố định
+
+**Nhiều (>5 loại):**
+- → **Phương án 1** hoặc **3** với nhiều templates
+
+---
+
+### 5. **Có cần tạo template từ UI không?**
+
+**KHÔNG cần** (Dev tạo sẵn trong database):
+- → **Phương án 1** đơn giản hơn
+
+**CẦN** (Admin tự tạo template trên UI):
+- → **Phương án 3** + thêm trang "Quản lý Template"
+
+---
+
+## 🎨 UI/UX ĐỀ XUẤT
+
+### **Với Phương án 1 (Template):**
+
+```
+Tạo Task Sản xuất:
+┌─────────────────────────────────────────┐
+│ 1. Chọn Template Sản xuất:              │
+│    [Dropdown: Bảng hiệu LED ▼]         │
+│                                         │
+│ 2. Preview Quy trình:                   │
+│    ┌─────────────────────────────────┐ │
+│    │ ✓ Giai đoạn 1: Thiết kế (2 ngày)│ │
+│    │   - Thiết kế 2D/3D               │ │
+│    │   - Trình khách duyệt            │ │
+│    │                                  │ │
+│    │ ○ Giai đoạn 2: Sản xuất mẫu (3)│ │
+│    │   - Gia công khung               │ │
+│    │   - Lắp điện LED                 │ │
+│    │   [Cần duyệt]                    │ │
+│    │                                  │ │
+│    │ ○ Giai đoạn 3: Sản xuất loạt... │ │
+│    └─────────────────────────────────┘ │
+│                                         │
+│ [Tùy chỉnh quy trình] [Tạo nhiệm vụ]  │
+└─────────────────────────────────────────┘
+```
+
+### **Với Phương án 2 (Checklist):**
+
+```
+Tạo Task Sản xuất:
+┌─────────────────────────────────────────┐
+│ Danh sách công việc:                    │
+│                                         │
+│ [+ Thêm bước]                           │
+│                                         │
+│ 1. [x] Thiết kế 3D             [Xóa]  │
+│    Người làm: Nguyễn Văn A             │
+│    Ước tính: 8h                        │
+│                                         │
+│ 2. [ ] Gia công khung          [Xóa]  │
+│    Người làm: [Chọn]                   │
+│    Ước tính: 16h                       │
+│                                         │
+│ 3. [ ] Sơn hoàn thiện          [Xóa]  │
+│    ...                                  │
+└─────────────────────────────────────────┘
+```
+
+### **Với Phương án 3 (Hybrid):**
+
+```
+┌─────────────────────────────────────────┐
+│ Quy trình Sản xuất:                     │
+│                                         │
+│ ○ Sử dụng template có sẵn              │
+│   [Dropdown: Chọn template ▼]          │
+│                                         │
+│ ● Tự tạo quy trình                     │
+│                                         │
+│ [Tiếp tục →]                            │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## 🏗️ KIẾN TRÚC DỮ LIỆU ĐỀ XUẤT
+
+### **Mô hình quan hệ:**
+
+```
+Task (Nhiệm vụ)
+├─ task_type = 'Lắp đặt' → task_locations
+├─ task_type = 'Giao hàng' → task_locations (giao hàng)
+└─ task_type = 'Sản xuất' → task_workflow
+                              ├─ workflow_stages (Giai đoạn)
+                              │   └─ workflow_steps (Bước)
+                              └─ workflow_approvals (Phê duyệt)
+```
+
+---
+
+## 📝 WORKFLOW ĐỀ XUẤT CHO SẢN XUẤT
+
+### **Template mặc định: "Sản xuất Bảng hiệu"**
+
+```
+Giai đoạn 1: THIẾT KẾ
+├─ Bước 1.1: Khảo sát & đo đạc
+├─ Bước 1.2: Thiết kế 2D/3D
+├─ Bước 1.3: Trình khách hàng
+└─ [Cần duyệt: Khách hàng]
+
+Giai đoạn 2: SẢN XUẤT MẪU
+├─ Bước 2.1: Chuẩn bị vật liệu
+├─ Bước 2.2: Gia công khung mẫu
+├─ Bước 2.3: Lắp ráp mẫu
+├─ Bước 2.4: Hoàn thiện mẫu
+└─ [Cần duyệt: Khách hàng + QC]
+
+Giai đoạn 3: SẢN XUẤT HÀNG LOẠT
+├─ Bước 3.1: Gia công khung sườn
+├─ Bước 3.2: Hàn/Lắp ráp cấu trúc
+├─ Bước 3.3: Lắp đặt điện/LED
+├─ Bước 3.4: Sơn/Phủ bề mặt
+├─ Bước 3.5: Lắp ráp hoàn thiện
+└─ [Cần duyệt: QC nội bộ]
+
+Giai đoạn 4: KIỂM TRA & BÀN GIAO
+├─ Bước 4.1: Kiểm tra chất lượng
+├─ Bước 4.2: Test vận hành
+├─ Bước 4.3: Đóng gói
+└─ Bước 4.4: Bàn giao kho/Lắp đặt
+```
+
+---
+
+## 💼 KHUYẾN NGHỊ CỦA TÔI
+
+### **Giai đoạn 1 (Hiện tại - MVP):**
+→ Chọn **Phương án 2 (Checklist đơn giản)**
+
+**Lý do:**
+- ✅ Nhanh nhất (1 tuần code)
+- ✅ Đủ dùng cho giai đoạn đầu
+- ✅ Validate được workflow thực tế
+- ✅ Thu thập feedback người dùng
+
+**Implement:**
+```
+Task Sản xuất có thêm:
+- production_steps table
+- Drag & drop reorder
+- Assign nhân viên từng bước
+- Track progress
+```
+
+---
+
+### **Giai đoạn 2 (Sau 3-6 tháng):**
+→ Nâng cấp lên **Phương án 3 (Hybrid)**
+
+**Lý do:**
+- ✅ Đã hiểu rõ quy trình thực tế
+- ✅ Có data để tạo templates chuẩn
+- ✅ Người dùng đã quen với hệ thống
+- ✅ Tăng tính chuyên nghiệp
+
+**Thêm:**
+```
+- Workflow templates
+- Approval system
+- QC checklist
+- Material tracking
+```
+
+---
+
+## ❓ CÂU HỎI CHO BẠN
+
+Trước khi tôi đề xuất solution cụ thể, bạn trả lời giúp tôi:
+
+### 1. **Quy trình sản xuất có cố định không?**
+   - [ ] CÓ - Hầu hết sản phẩm đi theo quy trình giống nhau
+   - [ ] KHÔNG - Mỗi sản phẩm khác nhau hoàn toàn
+
+### 2. **Cần phê duyệt giữa các giai đoạn không?**
+   - [ ] CẦN - VD: Sau thiết kế cần khách duyệt
+   - [ ] KHÔNG - Nhân viên tự quyết định
+
+### 3. **Mức độ quản lý chi tiết?**
+   - [ ] Cơ bản - Biết xong/chưa xong là đủ
+   - [ ] Chi tiết - Cần track từng bước, tiến độ %
+   - [ ] Rất chi tiết - Cần cả vật tư, QC, chi phí
+
+### 4. **Số loại sản phẩm sản xuất?**
+   - [ ] Ít (1-3 loại chủ yếu)
+   - [ ] Nhiều (>5 loại khác nhau)
+
+### 5. **Ưu tiên hiện tại?**
+   - [ ] Làm NHANH, đơn giản → dùng ngay
+   - [ ] Làm CHUẨN, đầy đủ → dù mất thời gian
+
+### 6. **Có muốn phân biệt rõ "Giai đoạn" và "Bước" không?**
+   - [ ] CÓ - VD: Giai đoạn "Sản xuất" có nhiều bước bên trong
+   - [ ] KHÔNG - Tất cả đều là công việc bình đẳng
+
+---
+
+**Bạn trả lời 6 câu hỏi trên, tôi sẽ đề xuất solution chi tiết + ERD + mockup UI phù hợp nhất!** 🎯

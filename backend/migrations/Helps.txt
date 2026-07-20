@@ -1,0 +1,4 @@
+##SQL command
+psql -d production_management -f backend/migrations/update_colums.sql
+##Restore DB
+To restore: pg_restore -U postgres -d production_management ./backups/backup_before_tasks_20251031_113600.dump.gz
