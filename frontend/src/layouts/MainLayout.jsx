@@ -27,7 +27,8 @@ import {
   CheckSquareOutlined,
   BarChartOutlined,
   EnvironmentOutlined,
-  ClockCircleOutlined
+  ClockCircleOutlined,
+  SwapOutlined
 } from '@ant-design/icons';
 
 const { Header, Sider, Content } = Layout;
@@ -125,6 +126,11 @@ const menuItems = [
         label: 'Báo cáo tháng',
       },
     ],
+  },
+  {
+    key: '/data-transfer',
+    icon: <SwapOutlined />,
+    label: 'Import / Export',
   },
   {
     key: '/materials',

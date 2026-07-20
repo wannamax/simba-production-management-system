@@ -22,6 +22,7 @@ import ScheduleList from './pages/ScheduleList';
 import ReportDaily from './pages/ReportDaily';
 import ReportWeekly from './pages/ReportWeekly';
 import ReportMonthly from './pages/ReportMonthly';
+import DataTransfer from './pages/DataTransfer';
 
 dayjs.locale('vi');
 
@@ -65,6 +66,7 @@ function App() {
             <Route path="reports/daily" element={<ReportDaily />} />
             <Route path="reports/weekly" element={<ReportWeekly />} />
             <Route path="reports/monthly" element={<ReportMonthly />} />
+            <Route path="data-transfer" element={<DataTransfer />} />
             
             {/* 404 */}
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -146,4 +146,18 @@ export const dashboardAPI = {
   getMaterials: (params) => api.get('/dashboard/materials', { params }),
 };
 
+// ==================== DATA TRANSFER ====================
+export const dataTransferAPI = {
+  downloadTemplate: (entity) => api.get(`/data-transfer/${entity}/template`, { responseType: 'blob' }),
+  exportExcel: (entity) => api.get(`/data-transfer/${entity}/export`, { responseType: 'blob' }),
+  importExcel: (entity, file, dryRun = true) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post(`/data-transfer/${entity}/import`, formData, {
+      params: { dry_run: dryRun },
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+};
+
 export default api;

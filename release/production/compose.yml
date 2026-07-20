@@ -18,7 +18,7 @@ services:
       start_period: 20s
     networks: [pms]
   backend:
-    image: ghcr.io/${IMAGE_OWNER:-wannamax}/simba-pms-backend:${APP_VERSION:-2.2.0}
+    image: ghcr.io/${IMAGE_OWNER:-wannamax}/simba-pms-backend:${APP_VERSION:-2.2.1}
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -41,7 +41,7 @@ services:
       start_period: 50s
     networks: [pms]
   web:
-    image: ghcr.io/${IMAGE_OWNER:-wannamax}/simba-pms-web:${APP_VERSION:-2.2.0}
+    image: ghcr.io/${IMAGE_OWNER:-wannamax}/simba-pms-web:${APP_VERSION:-2.2.1}
     restart: unless-stopped
     ports:
       - "${APP_PORT:-8080}:80"

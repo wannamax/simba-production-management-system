@@ -1,4 +1,4 @@
-# Simba PMS 2.2.0 — Production Installer
+# Simba PMS 2.2.1 — Production Installer
 
 Gói này không chứa source, Dockerfile, npm hay bước build. Image phải được pipeline GitHub Actions phát hành trước lên GHCR.
 

@@ -32,8 +32,8 @@ class CodeGenerator {
   /**
    * Generate Employee Code: NV#####
    */
-  static async generateEmployeeCode() {
-    const result = await pool.query("SELECT COUNT(*) as count FROM employees");
+  static async generateEmployeeCode(db = pool) {
+    const result = await db.query("SELECT COUNT(*) as count FROM employees");
     const count = parseInt(result.rows[0].count) + 1;
     return `NV${String(count).padStart(5, '0')}`;
   }
@@ -51,7 +51,7 @@ class CodeGenerator {
    * Generate Task Code: TASK-TYPE-YYYY####
    * @param {string} taskType - 'Sản xuất', 'Giao hàng', 'Lắp đặt'
    */
-  static async generateTaskCode(taskType) {
+  static async generateTaskCode(taskType, db = pool) {
     const year = new Date().getFullYear();
     
     // Map task type to prefix
@@ -64,7 +64,7 @@ class CodeGenerator {
     const typePrefix = typeMap[taskType] || 'TSK';
     const prefix = `${typePrefix}-${year}`;
     
-    const result = await pool.query(
+    const result = await db.query(
       "SELECT COUNT(*) as count FROM tasks WHERE task_code LIKE $1",
       [`${prefix}%`]
     );
