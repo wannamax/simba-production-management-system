@@ -1,85 +1,213 @@
-name: Release 2.2.0
+name: Release Simba PMS 2.2.1
+
 on:
-  push:
-    tags: ['v2.2.0']
   workflow_dispatch:
+  push:
+    tags:
+      - "v2.2.1"
+
 permissions:
   contents: read
   packages: write
+
 concurrency:
-  group: release-2.2.0
+  group: release-simba-pms-2.2.1
   cancel-in-progress: false
+
+env:
+  COMPOSE_FILE: compose.ci.yml
+  RELEASE_VERSION: "2.2.1"
+
 jobs:
   test-amd64:
+    name: Test amd64
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v4
-      - name: Build test images
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Validate Compose configuration
+        run: docker compose -f "$COMPOSE_FILE" config
+
+      - name: Build backend test image
+        run: docker build --progress=plain -t simba-pms-backend:ci ./backend
+
+      - name: Build frontend test image
+        run: docker build --progress=plain -t simba-pms-web:ci ./frontend
+
+      - name: Start clean integration stack
         run: |
-          docker build -t simba-pms-backend:ci ./backend
-          docker build -t simba-pms-web:ci ./frontend
-      - name: Start clean stack and run migrations
-        run: docker compose -f compose.ci.yml up -d --wait
-      - name: Verify schema migration
-        run: docker compose -f compose.ci.yml exec -T db psql -U pms_app -d production_management -c "SELECT * FROM schema_migrations;"
-      - name: Verify frontend and API
+          docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+          docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 180
+
+      - name: Show service status
+        run: docker compose -f "$COMPOSE_FILE" ps -a
+
+      - name: Verify schema migrations
         run: |
-          docker compose -f compose.ci.yml exec -T web wget -qO- http://127.0.0.1/health
-          docker compose -f compose.ci.yml exec -T backend node -e "fetch('http://127.0.0.1:3000/health').then(async r=>{if(!r.ok)process.exit(1);console.log(await r.text())})"
-      - name: Test import/export Excel
-        run: docker compose -f compose.ci.yml exec -T -e TEST_BASE_URL=http://web backend node tests/integration-smoke.js
-      - name: Test backup and restore
+          docker compose -f "$COMPOSE_FILE" exec -T db \
+            psql \
+              -v ON_ERROR_STOP=1 \
+              -U pms_app \
+              -d production_management \
+              -c "SELECT version, applied_at FROM schema_migrations ORDER BY applied_at;"
+
+      - name: Verify backend health
         run: |
-          docker compose -f compose.ci.yml exec -T db pg_dump -U pms_app -Fc production_management > /tmp/pms.dump
-          test -s /tmp/pms.dump
-          docker compose -f compose.ci.yml exec -T db createdb -U pms_app restore_test
-          cat /tmp/pms.dump | docker compose -f compose.ci.yml exec -T db pg_restore -U pms_app -d restore_test --no-owner
-          docker compose -f compose.ci.yml exec -T db psql -U pms_app -d restore_test -c "SELECT count(*) FROM schema_migrations;"
-      - if: always()
-        run: docker compose -f compose.ci.yml logs --no-color && docker compose -f compose.ci.yml down -v
+          docker compose -f "$COMPOSE_FILE" exec -T backend \
+            node -e "
+              fetch('http://127.0.0.1:3000/health')
+                .then(async response => {
+                  const body = await response.text();
+                  console.log(body);
+                  if (!response.ok) process.exit(1);
+                })
+                .catch(error => {
+                  console.error(error);
+                  process.exit(1);
+                });
+            "
+
+      - name: Verify frontend health
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T web \
+            wget --tries=5 --timeout=10 -qO- http://127.0.0.1/health
+
+      - name: Verify frontend can reach API
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T web \
+            wget --tries=5 --timeout=10 -qO- http://127.0.0.1/api/health
+
+      - name: Test Excel import and export
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend \
+            node tests/integration-smoke.js
+
+      - name: Test database backup and restore
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T db \
+            pg_dump \
+              -U pms_app \
+              -Fc \
+              production_management \
+              > /tmp/pms-ci.dump
+
+          test -s /tmp/pms-ci.dump
+
+          docker compose -f "$COMPOSE_FILE" exec -T db \
+            dropdb \
+              -U pms_app \
+              --if-exists \
+              restore_test
+
+          docker compose -f "$COMPOSE_FILE" exec -T db \
+            createdb \
+              -U pms_app \
+              restore_test
+
+          cat /tmp/pms-ci.dump |
+            docker compose -f "$COMPOSE_FILE" exec -T db \
+              pg_restore \
+                -U pms_app \
+                -d restore_test \
+                --no-owner \
+                --no-privileges \
+                --exit-on-error
+
+          docker compose -f "$COMPOSE_FILE" exec -T db \
+            psql \
+              -v ON_ERROR_STOP=1 \
+              -U pms_app \
+              -d restore_test \
+              -c "SELECT count(*) AS migration_count FROM schema_migrations;"
+
+      - name: Show container logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          echo "===== CONTAINER STATUS ====="
+          docker compose -f "$COMPOSE_FILE" ps -a || true
+
+          echo "===== DATABASE LOGS ====="
+          docker compose -f "$COMPOSE_FILE" logs \
+            --no-color \
+            --tail=300 \
+            db || true
+
+          echo "===== BACKEND LOGS ====="
+          docker compose -f "$COMPOSE_FILE" logs \
+            --no-color \
+            --tail=500 \
+            backend || true
+
+          echo "===== WEB LOGS ====="
+          docker compose -f "$COMPOSE_FILE" logs \
+            --no-color \
+            --tail=300 \
+            web || true
+
+      - name: Stop integration stack
+        if: always()
+        continue-on-error: true
+        run: |
+          docker compose -f "$COMPOSE_FILE" down \
+            -v \
+            --remove-orphans
+
   publish:
+    name: Publish ${{ matrix.name }} image
     needs: test-amd64
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: backend
             context: ./backend
           - name: web
             context: ./frontend
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v3
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+
+      - name: Build and publish ${{ matrix.name }}
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.2.0
+            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:${{ env.RELEASE_VERSION }}
             ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.2
+          labels: |
+            org.opencontainers.image.title=Simba PMS ${{ matrix.name }}
+            org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-
-          - name: Show logs on failure
-  if: failure()
-  run: |
-    docker compose ps -a || true
-
-    echo "===== DB LOGS ====="
-    docker compose logs db --tail=200 || true
-
-    echo "===== BACKEND LOGS ====="
-    docker compose logs backend --tail=300 || true
-
-    echo "===== WEB LOGS ====="
-    docker compose logs web --tail=100 || true
