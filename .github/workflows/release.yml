@@ -69,3 +69,17 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+          - name: Show logs on failure
+  if: failure()
+  run: |
+    docker compose ps -a || true
+
+    echo "===== DB LOGS ====="
+    docker compose logs db --tail=200 || true
+
+    echo "===== BACKEND LOGS ====="
+    docker compose logs backend --tail=300 || true
+
+    echo "===== WEB LOGS ====="
+    docker compose logs web --tail=100 || true
