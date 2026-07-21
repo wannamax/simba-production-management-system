@@ -18,6 +18,10 @@ const dashboardRouter = require('./routes/dashboard');
 const taskActionsRouter = require('./routes/task-actions');
 const tasksRouter = require('./routes/tasks');
 const dataTransferRouter = require('./routes/data-transfer');
+const settingsRouter = require('./routes/settings');
+const materialsRouter = require('./routes/materials');
+const materialAdminRouter = require('./routes/material-admin');
+const materialPlanningRouter = require('./routes/material-planning');
 
 const app = express();
 
@@ -45,7 +49,7 @@ async function healthHandler(req, res) {
     res.json({
       status: 'OK',
       database: 'connected',
-      version: '2.2.1',
+      version: '2.4.0-B',
       timestamp: new Date().toISOString(),
       uptime: process.uptime()
     });
@@ -72,6 +76,10 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/tasks', taskActionsRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/data-transfer', dataTransferRouter);
+app.use('/api/settings', settingsRouter);
+app.use('/api/materials', materialsRouter);
+app.use('/api/material-admin', materialAdminRouter);
+app.use('/api/material-planning', materialPlanningRouter);
 
 app.use((req, res) => {
   res.status(404).json({

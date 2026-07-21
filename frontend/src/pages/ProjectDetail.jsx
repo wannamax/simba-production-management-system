@@ -26,10 +26,12 @@ import {
   TeamOutlined,
   FileTextOutlined,
   InboxOutlined,
-  PlusOutlined
+  PlusOutlined,
+  ToolOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import axios from 'axios';
+import ProjectMaterialsPanel from '../components/ProjectMaterialsPanel';
 
 const { TabPane } = Tabs;
 const { Option } = Select;
@@ -382,6 +384,18 @@ const ProjectDetail = () => {
               locale={{ emptyText: 'Chưa phân công nhân viên' }}
             />
           </Card>
+        </TabPane>
+
+        <TabPane
+          tab={
+            <span>
+              <ToolOutlined />
+              Vật tư
+            </span>
+          }
+          key="materials"
+        >
+          <ProjectMaterialsPanel projectId={Number(id)} />
         </TabPane>
 
         <TabPane
