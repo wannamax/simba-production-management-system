@@ -19,9 +19,11 @@ import EmployeeAvailability from './pages/EmployeeAvailability'; // ? THï¿½M Dï¿
 import TaskList from './pages/TaskList';
 import TaskDetail from './pages/TaskDetail';
 import ScheduleList from './pages/ScheduleList';
+import ScheduleCalendar from './pages/ScheduleCalendar';
 import ReportDaily from './pages/ReportDaily';
 import ReportWeekly from './pages/ReportWeekly';
 import ReportMonthly from './pages/ReportMonthly';
+import Notifications from './pages/Notifications';
 import DataTransfer from './pages/DataTransfer';
 
 dayjs.locale('vi');
@@ -61,7 +63,10 @@ function App() {
             
             {/* Schedules */}
             <Route path="schedules" element={<ScheduleList />} />
+            <Route path="schedules/calendar" element={<ScheduleCalendar />} />
             
+            <Route path="notifications" element={<Notifications />} />
+
             {/* Reports */}
             <Route path="reports/daily" element={<ReportDaily />} />
             <Route path="reports/weekly" element={<ReportWeekly />} />

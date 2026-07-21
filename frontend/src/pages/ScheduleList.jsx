@@ -1,312 +1,138 @@
-import React, { useEffect, useState } from 'react';
-import {
-  Table,
-  Button,
-  Space,
-  Tag,
-  Card,
-  Modal,
-  Form,
-  Input,
-  Select,
-  DatePicker,
-  message,
-  Progress
-} from 'antd';
-import { PlusOutlined, EyeOutlined, CalendarOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Progress, Select, Space, Table, Tag, message } from 'antd';
+import { CalendarOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { scheduleAPI, projectAPI, employeeAPI } from '../services/api';
-import {
-  SCHEDULE_STATUS_COLORS,
-  SCHEDULE_TYPES,
-  SCHEDULE_TYPE_COLORS,
-  PRIORITY_COLORS
-} from '../utils/constants';
+import { SCHEDULE_STATUS_COLORS, SCHEDULE_TYPES, PRIORITY_COLORS } from '../utils/constants';
 
 const { Option } = Select;
 const { RangePicker } = DatePicker;
 
 const ScheduleList = () => {
-  const navigate = useNavigate();
   const [schedules, setSchedules] = useState([]);
   const [projects, setProjects] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [filters, setFilters] = useState({});
   const [form] = Form.useForm();
 
-  useEffect(() => {
-    loadSchedules();
-    loadProjects();
-    loadEmployees();
-  }, []);
-
-  const loadSchedules = async () => {
+  const loadSchedules = async (next = filters) => {
     setLoading(true);
     try {
-      const response = await scheduleAPI.getAll();
-      setSchedules(response.data);
-    } catch (error) {
-      message.error('Không thể tải danh sách lịch trình');
-    } finally {
-      setLoading(false);
-    }
+      const response = await scheduleAPI.getAll(next);
+      setSchedules(response.data || []);
+    } catch (error) { message.error(error.message || 'Không thể tải lịch trình'); }
+    finally { setLoading(false); }
   };
 
-  const loadProjects = async () => {
-    try {
-      const response = await projectAPI.getAll({ limit: 1000 });
-      setProjects(response.data);
-    } catch (error) {
-      console.error('Error loading projects:', error);
-    }
-  };
+  useEffect(() => {
+    Promise.all([
+      projectAPI.getAll({ limit: 1000 }),
+      employeeAPI.getAll({ status: 'Hoạt động', limit: 1000 }),
+    ]).then(([p, e]) => {
+      setProjects(p.data || []);
+      setEmployees(e.data || []);
+    }).catch(() => message.warning('Không thể tải đầy đủ dữ liệu bộ lọc'));
+    loadSchedules({});
+  }, []);
 
-  const loadEmployees = async () => {
-    try {
-      const response = await employeeAPI.getAll({ status: 'Hoạt động' });
-      setEmployees(response.data);
-    } catch (error) {
-      console.error('Error loading employees:', error);
-    }
-  };
-
-  const handleCreate = () => {
+  const openCreate = () => {
+    setEditing(null);
     form.resetFields();
-    setModalVisible(true);
+    form.setFieldsValue({ priority: 'Trung bình', status: 'Chưa bắt đầu', progress: 0 });
+    setModalOpen(true);
   };
 
-  const handleSubmit = async (values) => {
+  const openEdit = (record) => {
+    setEditing(record);
+    form.setFieldsValue({
+      ...record,
+      datetime: [dayjs(record.start_datetime), dayjs(record.end_datetime)],
+      employee_ids: (record.employees || []).map((item) => item.employee_id),
+    });
+    setModalOpen(true);
+  };
+
+  const submit = async (values) => {
+    const payload = {
+      ...values,
+      start_datetime: values.datetime[0].toISOString(),
+      end_datetime: values.datetime[1].toISOString(),
+    };
+    delete payload.datetime;
     try {
-      const data = {
-        ...values,
-        start_datetime: values.datetime[0].toISOString(),
-        end_datetime: values.datetime[1].toISOString(),
-      };
-      delete data.datetime;
-
-      await scheduleAPI.create(data);
-      message.success('Tạo lịch trình thành công');
-      setModalVisible(false);
-      form.resetFields();
-      loadSchedules();
-    } catch (error) {
-      message.error('Không thể tạo lịch trình: ' + (error.message || 'Lỗi không xác định'));
-      console.error('Create schedule error:', error);
-    }
+      if (editing) await scheduleAPI.update(editing.id, payload);
+      else await scheduleAPI.create(payload);
+      message.success(editing ? 'Đã cập nhật lịch trình' : 'Đã tạo lịch trình');
+      setModalOpen(false);
+      await loadSchedules();
+    } catch (error) { message.error(error.message || 'Không thể lưu lịch trình'); }
   };
 
-  const columns = [
-    {
-      title: 'Dự án',
-      dataIndex: 'project_name',
-      key: 'project_name',
-      width: 200,
-      ellipsis: true,
-    },
-    {
-      title: 'Loại',
-      dataIndex: 'schedule_type',
-      key: 'schedule_type',
-      width: 120,
-      render: (type) => (
-        <Tag color={SCHEDULE_TYPE_COLORS[type]}>{type}</Tag>
-      ),
-    },
-    {
-      title: 'Tiêu đề',
-      dataIndex: 'title',
-      key: 'title',
-      ellipsis: true,
-    },
-    {
-      title: 'Địa điểm',
-      dataIndex: 'location',
-      key: 'location',
-      width: 150,
-      ellipsis: true,
-    },
-    {
-      title: 'Thời gian',
-      dataIndex: 'start_datetime',
-      key: 'start_datetime',
-      width: 180,
-      render: (date, record) => (
-        <div>
-          <div>{dayjs(date).format('DD/MM/YYYY HH:mm')}</div>
-          <div style={{ fontSize: 12, color: '#999' }}>
-            đến {dayjs(record.end_datetime).format('DD/MM HH:mm')}
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Trạng thái',
-      dataIndex: 'status',
-      key: 'status',
-      width: 140,
-      render: (status) => (
-        <Tag color={SCHEDULE_STATUS_COLORS[status]}>{status}</Tag>
-      ),
-    },
-    {
-      title: 'Tiến độ',
-      dataIndex: 'progress',
-      key: 'progress',
-      width: 120,
-      render: (progress) => <Progress percent={progress || 0} size="small" />,
-    },
-    {
-      title: 'Hành động',
-      key: 'action',
-      width: 100,
-      fixed: 'right',
-      render: (_, record) => (
-        <Button
-          type="link"
-          icon={<EyeOutlined />}
-          onClick={() => navigate(`/schedules/${record.id}`)}
-          size="small"
-        >
-          Xem
-        </Button>
-      ),
-    },
-  ];
+  const remove = async (id) => {
+    try {
+      await scheduleAPI.delete(id);
+      message.success('Đã xóa lịch trình');
+      await loadSchedules();
+    } catch (error) { message.error(error.message || 'Không thể xóa lịch trình'); }
+  };
 
-  return (
-    <div>
-      <div className="page-header">
-        <h1>Quản lý Lịch trình</h1>
-        <Space>
-          <Button
-            icon={<CalendarOutlined />}
-            onClick={() => navigate('/schedules/calendar')}
-          >
-            Xem lịch
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-            Tạo lịch trình
-          </Button>
+  const applyFilters = (values) => {
+    const next = {
+      ...values,
+      from_date: values.date_range?.[0]?.format('YYYY-MM-DD'),
+      to_date: values.date_range?.[1]?.format('YYYY-MM-DD'),
+    };
+    delete next.date_range;
+    Object.keys(next).forEach((key) => !next[key] && delete next[key]);
+    setFilters(next);
+    loadSchedules(next);
+  };
+
+  const columns = useMemo(() => [
+    { title: 'Lịch trình', dataIndex: 'title', key: 'title', render: (value, record) => <><div style={{ fontWeight: 600 }}>{value}</div><small>{record.project_code} - {record.project_name}</small></> },
+    { title: 'Loại', dataIndex: 'schedule_type', key: 'schedule_type', render: (v) => <Tag>{v}</Tag> },
+    { title: 'Thời gian', key: 'time', render: (_, r) => <>{dayjs(r.start_datetime).format('DD/MM/YYYY HH:mm')}<br/><small>đến {dayjs(r.end_datetime).format('DD/MM/YYYY HH:mm')}</small></> },
+    { title: 'Nhân viên', key: 'employees', render: (_, r) => (r.employees || []).length ? (r.employees || []).map(e => <Tag key={e.employee_id}>{e.full_name}</Tag>) : <span>Chưa phân công</span> },
+    { title: 'Trạng thái', dataIndex: 'status', key: 'status', render: (v) => <Tag color={SCHEDULE_STATUS_COLORS[v]}>{v}</Tag> },
+    { title: 'Ưu tiên', dataIndex: 'priority', key: 'priority', render: (v) => <Tag color={PRIORITY_COLORS[v]}>{v}</Tag> },
+    { title: 'Tiến độ', dataIndex: 'progress', key: 'progress', render: (v) => <Progress percent={Number(v || 0)} size="small" /> },
+    { title: 'Thao tác', key: 'actions', fixed: 'right', render: (_, r) => <Space><Button icon={<EditOutlined />} onClick={() => openEdit(r)}>Sửa</Button><Popconfirm title="Xóa lịch trình này?" onConfirm={() => remove(r.id)}><Button danger icon={<DeleteOutlined />}>Xóa</Button></Popconfirm></Space> },
+  ], [schedules]);
+
+  return <div>
+    <div className="page-header"><h1>Quản lý Lịch trình</h1><Space><Button icon={<ReloadOutlined />} onClick={() => loadSchedules()}>Làm mới</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Tạo lịch trình</Button></Space></div>
+    <Card style={{ marginBottom: 16 }}>
+      <Form layout="inline" onFinish={applyFilters}>
+        <Form.Item name="search"><Input allowClear prefix={<SearchOutlined />} placeholder="Tiêu đề hoặc địa điểm" /></Form.Item>
+        <Form.Item name="project_id"><Select allowClear placeholder="Dự án" style={{ width: 210 }}>{projects.map(p => <Option key={p.id} value={p.id}>{p.project_code} - {p.project_name}</Option>)}</Select></Form.Item>
+        <Form.Item name="employee_id"><Select allowClear showSearch optionFilterProp="children" placeholder="Nhân viên" style={{ width: 190 }}>{employees.map(e => <Option key={e.id} value={e.id}>{e.full_name}</Option>)}</Select></Form.Item>
+        <Form.Item name="status"><Select allowClear placeholder="Trạng thái" style={{ width: 150 }}>{Object.keys(SCHEDULE_STATUS_COLORS).map(v => <Option key={v} value={v}>{v}</Option>)}</Select></Form.Item>
+        <Form.Item name="date_range"><RangePicker format="DD/MM/YYYY" /></Form.Item>
+        <Form.Item><Button type="primary" htmlType="submit">Lọc</Button></Form.Item>
+      </Form>
+    </Card>
+    <Card><Table columns={columns} dataSource={schedules} rowKey="id" loading={loading} scroll={{ x: 1300 }} /></Card>
+    <Modal title={editing ? 'Sửa lịch trình' : 'Tạo lịch trình'} open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={760} destroyOnClose>
+      <Form form={form} layout="vertical" onFinish={submit}>
+        <Form.Item name="project_id" label="Dự án" rules={[{ required: true }]}><Select showSearch optionFilterProp="children">{projects.map(p => <Option key={p.id} value={p.id}>{p.project_code} - {p.project_name}</Option>)}</Select></Form.Item>
+        <Space style={{ display: 'flex' }} align="start">
+          <Form.Item name="schedule_type" label="Loại" rules={[{ required: true }]} style={{ flex: 1 }}><Select>{Object.values(SCHEDULE_TYPES).map(v => <Option key={v} value={v}>{v}</Option>)}</Select></Form.Item>
+          <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]} style={{ flex: 1 }}><Select>{Object.keys(SCHEDULE_STATUS_COLORS).map(v => <Option key={v} value={v}>{v}</Option>)}</Select></Form.Item>
+          <Form.Item name="priority" label="Ưu tiên" style={{ flex: 1 }}><Select>{['Thấp','Trung bình','Cao','Khẩn cấp'].map(v => <Option key={v} value={v}>{v}</Option>)}</Select></Form.Item>
         </Space>
-      </div>
-
-      <Card>
-        <Table
-          columns={columns}
-          dataSource={schedules}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1200 }}
-        />
-      </Card>
-
-      {/* Modal Tạo Lịch trình */}
-      <Modal
-        title="Tạo lịch trình mới"
-        open={modalVisible}
-        onCancel={() => setModalVisible(false)}
-        footer={null}
-        width={700}
-      >
-        <Form form={form} layout="vertical" onFinish={handleSubmit}>
-          <Form.Item
-            name="project_id"
-            label="Dự án"
-            rules={[{ required: true, message: 'Vui lòng chọn dự án' }]}
-          >
-            <Select
-              placeholder="Chọn dự án"
-              showSearch
-              optionFilterProp="children"
-            >
-              {projects.map((p) => (
-                <Option key={p.id} value={p.id}>
-                  {p.project_code} - {p.project_name}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="schedule_type"
-            label="Loại công việc"
-            rules={[{ required: true, message: 'Vui lòng chọn loại công việc' }]}
-          >
-            <Select placeholder="Chọn loại công việc">
-              {Object.values(SCHEDULE_TYPES).map((type) => (
-                <Option key={type} value={type}>
-                  {type}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="title"
-            label="Tiêu đề"
-            rules={[{ required: true, message: 'Vui lòng nhập tiêu đề' }]}
-          >
-            <Input placeholder="Nhập tiêu đề công việc" />
-          </Form.Item>
-
-          <Form.Item name="description" label="Mô tả">
-            <Input.TextArea rows={3} placeholder="Mô tả chi tiết công việc" />
-          </Form.Item>
-
-          <Form.Item name="location" label="Địa điểm">
-            <Input placeholder="Địa điểm thực hiện" />
-          </Form.Item>
-
-          <Form.Item
-            name="datetime"
-            label="Thời gian"
-            rules={[{ required: true, message: 'Vui lòng chọn thời gian' }]}
-          >
-            <RangePicker
-              showTime
-              format="DD/MM/YYYY HH:mm"
-              style={{ width: '100%' }}
-              placeholder={['Bắt đầu', 'Kết thúc']}
-            />
-          </Form.Item>
-
-          <Form.Item name="priority" label="Mức độ ưu tiên">
-            <Select placeholder="Chọn mức độ">
-              <Option value="Thấp">Thấp</Option>
-              <Option value="Trung bình">Trung bình</Option>
-              <Option value="Cao">Cao</Option>
-              <Option value="Khẩn cấp">Khẩn cấp</Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item name="employee_ids" label="Phân công nhân viên">
-            <Select
-              mode="multiple"
-              placeholder="Chọn nhân viên"
-              optionFilterProp="children"
-            >
-              {employees.map((e) => (
-                <Option key={e.id} value={e.id}>
-                  {e.full_name} - {e.department}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item>
-            <Space>
-              <Button type="primary" htmlType="submit">
-                Tạo lịch trình
-              </Button>
-              <Button onClick={() => setModalVisible(false)}>Hủy</Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
-    </div>
-  );
+        <Form.Item name="title" label="Tiêu đề" rules={[{ required: true }]}><Input /></Form.Item>
+        <Form.Item name="description" label="Mô tả"><Input.TextArea rows={3} /></Form.Item>
+        <Form.Item name="location" label="Địa điểm"><Input /></Form.Item>
+        <Form.Item name="datetime" label="Thời gian" rules={[{ required: true }]}><RangePicker showTime format="DD/MM/YYYY HH:mm" style={{ width: '100%' }} /></Form.Item>
+        <Form.Item name="employee_ids" label="Phân công nhân viên"><Select mode="multiple" showSearch optionFilterProp="children">{employees.map(e => <Option key={e.id} value={e.id}>{e.full_name} - {e.department || ''}</Option>)}</Select></Form.Item>
+        <Form.Item name="progress" label="Tiến độ"><Select>{[0,25,50,75,100].map(v => <Option key={v} value={v}>{v}%</Option>)}</Select></Form.Item>
+        <Space><Button type="primary" htmlType="submit">{editing ? 'Lưu thay đổi' : 'Tạo lịch trình'}</Button><Button onClick={() => setModalOpen(false)}>Hủy</Button></Space>
+      </Form>
+    </Modal>
+  </div>;
 };
 
 export default ScheduleList;

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Layout,
@@ -30,6 +30,7 @@ import {
   ClockCircleOutlined,
   SwapOutlined
 } from '@ant-design/icons';
+import { notificationAPI } from '../services/api';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -40,6 +41,8 @@ const MainLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileDrawerVisible, setMobileDrawerVisible] = useState(false);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Handle window resize
   React.useEffect(() => {
@@ -48,6 +51,22 @@ const MainLayout = () => {
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const loadNotifications = async () => {
+    try {
+      const response = await notificationAPI.getUnread();
+      setNotifications(response.data || []);
+      setUnreadCount(response.unread_count || 0);
+    } catch (error) {
+      console.error('Không thể tải thông báo:', error);
+    }
+  };
+
+  useEffect(() => {
+    loadNotifications();
+    const timer = window.setInterval(loadNotifications, 30000);
+    return () => window.clearInterval(timer);
   }, []);
 
 const menuItems = [
@@ -265,6 +284,30 @@ const getOpenKeys = () => {
     />
   );
 
+  const notificationMenuItems = notifications.length
+    ? notifications.slice(0, 8).map((item) => ({
+        key: `${item.source}:${item.id}`,
+        label: (
+          <div style={{ width: 320, whiteSpace: 'normal' }}>
+            <Text strong>{item.title}</Text>
+            <div style={{ fontSize: 12 }}>{item.message}</div>
+          </div>
+        ),
+        onClick: async () => {
+          try {
+            await notificationAPI.markRead(item.source, item.id);
+            if (item.link) navigate(item.link);
+            await loadNotifications();
+          } catch (error) {
+            console.error(error);
+          }
+        },
+      }))
+    : [{ key: 'empty', disabled: true, label: 'Không có thông báo mới' }];
+
+  notificationMenuItems.push({ type: 'divider' });
+  notificationMenuItems.push({ key: 'all', label: 'Xem tất cả thông báo', onClick: () => navigate('/notifications') });
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       {/* Desktop Sider */}
@@ -383,13 +426,11 @@ const getOpenKeys = () => {
 
           <Space size="large">
             {/* Notifications */}
-            <Badge count={5} offset={[-5, 5]}>
-              <Button
-                type="text"
-                icon={<BellOutlined style={{ fontSize: 18 }} />}
-                onClick={() => navigate('/notifications')}
-              />
-            </Badge>
+            <Dropdown menu={{ items: notificationMenuItems }} placement="bottomRight" trigger={['click']}>
+              <Badge count={unreadCount} overflowCount={99} offset={[-5, 5]}>
+                <Button type="text" icon={<BellOutlined style={{ fontSize: 18 }} />} />
+              </Badge>
+            </Dropdown>
 
             {/* User Menu */}
             <Dropdown

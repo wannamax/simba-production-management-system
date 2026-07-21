@@ -89,6 +89,7 @@ export const scheduleAPI = {
   getById: (id) => api.get(`/schedules/${id}`),
   create: (data) => api.post('/schedules', data),
   update: (id, data) => api.put(`/schedules/${id}`, data),
+  delete: (id) => api.delete(`/schedules/${id}`),
   updateProgress: (id, data) => api.patch(`/schedules/${id}/progress`, data),
   assignEmployee: (id, data) => api.post(`/schedules/${id}/assignments`, data),
   removeEmployee: (id, assignmentId) => api.delete(`/schedules/${id}/assignments/${assignmentId}`),
@@ -123,6 +124,14 @@ export const taskAPI = {
   // Notifications
   getUnreadNotifications: () => api.get('/tasks/notifications/unread'),
   markNotificationRead: (id) => api.patch(`/tasks/notifications/${id}/read`),
+};
+
+// ==================== NOTIFICATIONS ====================
+export const notificationAPI = {
+  getAll: (params) => api.get('/notifications', { params }),
+  getUnread: () => api.get('/notifications', { params: { unread_only: true, limit: 20 } }),
+  markRead: (source, id) => api.patch(`/notifications/${source}/${id}/read`),
+  markAllRead: () => api.patch('/notifications/read-all'),
 };
 
 // ==================== REPORTS ====================
