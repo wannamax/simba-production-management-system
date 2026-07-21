@@ -22,6 +22,8 @@ const settingsRouter = require('./routes/settings');
 const materialsRouter = require('./routes/materials');
 const materialAdminRouter = require('./routes/material-admin');
 const materialPlanningRouter = require('./routes/material-planning');
+const inventoryRouter = require('./routes/inventory');
+const appVersion = require('./config/version');
 
 const app = express();
 
@@ -49,7 +51,9 @@ async function healthHandler(req, res) {
     res.json({
       status: 'OK',
       database: 'connected',
-      version: '2.4.0-B',
+      product: appVersion.product,
+      version: appVersion.version,
+      display_version: appVersion.display,
       timestamp: new Date().toISOString(),
       uptime: process.uptime()
     });
@@ -80,6 +84,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/materials', materialsRouter);
 app.use('/api/material-admin', materialAdminRouter);
 app.use('/api/material-planning', materialPlanningRouter);
+app.use('/api/inventory', inventoryRouter);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -96,7 +101,7 @@ const server = app.listen(PORT, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
 ║                                                        ║
-║   🚀 Production Management API Server                 ║
+║   🚀 Simba PMS API — Version 2.4.0-D                  ║
 ║                                                        ║
 ║   Port: ${PORT}                                           ║
 ║   Environment: ${process.env.NODE_ENV || 'development'}                              ║

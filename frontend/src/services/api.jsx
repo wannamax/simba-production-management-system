@@ -169,6 +169,47 @@ export const dataTransferAPI = {
   },
 };
 
+
+// ==================== MATERIAL MASTER DATA ====================
+export const materialAPI = {
+  getAll: (params) => api.get('/materials', { params }),
+  getById: (id) => api.get(`/materials/${id}`),
+  getMeta: () => api.get('/materials/meta'),
+  create: (data) => api.post('/materials', data),
+  update: (id, data) => api.put(`/materials/${id}`, data),
+  delete: (id) => api.delete(`/materials/${id}`),
+  saveConversion: (id, data) => api.post(`/materials/${id}/conversions`, data),
+  deleteConversion: (id, conversionId) => api.delete(`/materials/${id}/conversions/${conversionId}`),
+};
+
+export const materialAdminAPI = {
+  getSettings: () => api.get('/material-admin/settings'),
+  updateSettings: (data) => api.put('/material-admin/settings', data),
+  getAll: (entity) => api.get(`/material-admin/${entity}`),
+  create: (entity, data) => api.post(`/material-admin/${entity}`, data),
+  update: (entity, id, data) => api.put(`/material-admin/${entity}/${id}`, data),
+  delete: (entity, id) => api.delete(`/material-admin/${entity}/${id}`),
+  createLocation: (warehouseId, data) => api.post(`/material-admin/warehouses/${warehouseId}/locations`, data),
+  updateLocation: (warehouseId, id, data) => api.put(`/material-admin/warehouses/${warehouseId}/locations/${id}`, data),
+  deleteLocation: (warehouseId, id) => api.delete(`/material-admin/warehouses/${warehouseId}/locations/${id}`),
+};
+
+// ==================== INVENTORY TRANSACTIONS ====================
+export const inventoryAPI = {
+  getMeta: () => api.get('/inventory/meta'),
+  getProjectContext: (projectId) => api.get(`/inventory/project-context/${projectId}`),
+  getDocuments: (params) => api.get('/inventory/documents', { params }),
+  getDocument: (id) => api.get(`/inventory/documents/${id}`),
+  createDocument: (data) => api.post('/inventory/documents', data),
+  updateDocument: (id, data) => api.put(`/inventory/documents/${id}`, data),
+  postDocument: (id) => api.post(`/inventory/documents/${id}/post`),
+  reverseDocument: (id, data) => api.post(`/inventory/documents/${id}/reverse`, data),
+  cancelDocument: (id) => api.delete(`/inventory/documents/${id}`),
+  exportDocument: (id) => api.get(`/inventory/documents/${id}/export.xlsx`, { responseType: 'blob' }),
+  getBalances: (params) => api.get('/inventory/balances', { params }),
+  getTransactions: (params) => api.get('/inventory/transactions', { params }),
+};
+
 // ==================== SETTINGS ====================
 export const settingsAPI = {
   getCompany: () => api.get('/settings/company'),

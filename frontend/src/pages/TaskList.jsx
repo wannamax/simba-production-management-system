@@ -32,6 +32,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import axios from 'axios';
+import { settingsAPI } from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -57,8 +58,11 @@ const TaskList = () => {
 
   useEffect(() => {
     settingsAPI.getCatalogs({ type: 'TASK_TYPE' }).then(r => setTaskTypes(r.data || [])).catch(e => message.warning(e.message));
-    loadTasks();
     loadProjects();
+  }, []);
+
+  useEffect(() => {
+    loadTasks();
   }, [filters]);
 
   const loadTasks = async () => {
@@ -436,9 +440,11 @@ const TaskList = () => {
             allowClear
             onChange={(value) => setFilters({ ...filters, task_type: value || '' })}
           >
-            <Option value="Sản xuất">Sản xuất</Option>
-            <Option value="Giao hàng">Giao hàng</Option>
-            <Option value="Lắp đặt">Lắp đặt</Option>
+            {taskTypes.map((item) => (
+              <Option key={item.id} value={item.name}>
+                {item.name}
+              </Option>
+            ))}
           </Select>
           <Select
             placeholder="Trạng thái"

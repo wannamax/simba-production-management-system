@@ -9,7 +9,8 @@ router.get('/', async (req, res) => {
     const offset = (page - 1) * limit;
     
     let query = `
-      SELECT p.*, c.company_name, c.contact_person, c.phone as customer_phone
+      SELECT p.*, c.company_name, c.contact_person, c.phone as customer_phone,
+        COALESCE((SELECT SUM(a.actual_cost) FROM v_project_material_actuals a WHERE a.project_id=p.id),0) AS actual_material_cost
       FROM projects p
       LEFT JOIN customers c ON p.customer_id = c.id
       WHERE 1=1
@@ -36,7 +37,8 @@ router.get('/', async (req, res) => {
     }
     
     const countQuery = query.replace(
-      'SELECT p.*, c.company_name, c.contact_person, c.phone as customer_phone',
+      `SELECT p.*, c.company_name, c.contact_person, c.phone as customer_phone,
+        COALESCE((SELECT SUM(a.actual_cost) FROM v_project_material_actuals a WHERE a.project_id=p.id),0) AS actual_material_cost`,
       'SELECT COUNT(*)'
     );
     const countResult = await pool.query(countQuery, params);
@@ -67,7 +69,8 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT p.*, c.company_name, c.contact_person, c.phone as customer_phone
+      SELECT p.*, c.company_name, c.contact_person, c.phone as customer_phone,
+        COALESCE((SELECT SUM(a.actual_cost) FROM v_project_material_actuals a WHERE a.project_id=p.id),0) AS actual_material_cost
       FROM projects p
       LEFT JOIN customers c ON p.customer_id = c.id
       WHERE p.id = $1

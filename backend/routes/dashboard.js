@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
+const appVersion = require('../config/version');
 
 // GET dashboard summary
 router.get('/summary', async (req, res) => {
@@ -69,6 +70,8 @@ router.get('/summary', async (req, res) => {
     res.json({
       success: true,
       data: {
+        version: appVersion.version,
+        display_version: appVersion.display,
         projects: projectStats.rows,
         schedules: scheduleStats.rows,
         employees: employeeStats.rows,

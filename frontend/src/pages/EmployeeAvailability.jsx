@@ -34,12 +34,10 @@ import {
   ReloadOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import axios from 'axios';
+import api from '../services/api';
 
 const { RangePicker } = DatePicker;
 const { Option } = Select;
-
-const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 const EmployeeAvailability = () => {
   const [loading, setLoading] = useState(false);
@@ -48,6 +46,8 @@ const EmployeeAvailability = () => {
   const [availabilityData, setAvailabilityData] = useState([]);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [loadError, setLoadError] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
 
   // Filters
   const [filters, setFilters] = useState({
@@ -59,14 +59,15 @@ const EmployeeAvailability = () => {
   useEffect(() => {
     loadEmployees();
     loadProjects();
+    loadAvailability();
   }, []);
 
   const loadEmployees = async () => {
     try {
-      const response = await axios.get(`${API_URL}/employees`, {
+      const response = await api.get('/employees', {
         params: { status: 'Hoạt động' }
       });
-      const data = response.data.data || response.data;
+      const data = response.data || response;
       setEmployees(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error loading employees:', error);
@@ -76,8 +77,8 @@ const EmployeeAvailability = () => {
 
   const loadProjects = async () => {
     try {
-      const response = await axios.get(`${API_URL}/projects`);
-      const data = response.data.data || response.data;
+      const response = await api.get('/projects');
+      const data = response.data || response;
       setProjects(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error loading projects:', error);
@@ -85,75 +86,52 @@ const EmployeeAvailability = () => {
     }
   };
 
-  const handleFilter = async () => {
+  const loadAvailability = async (nextFilters = filters) => {
     setLoading(true);
-    try {
-      const params = {
-        employee_ids: filters.employee_ids.length > 0 ? filters.employee_ids.join(',') : undefined,
-        project_ids: filters.project_ids.length > 0 ? filters.project_ids.join(',') : undefined,
-        start_date: filters.date_range?.[0]?.format('YYYY-MM-DD'),
-        end_date: filters.date_range?.[1]?.format('YYYY-MM-DD'),
-      };
+    setLoadError('');
 
-      // Try to load from API
-      try {
-        const response = await axios.get(`${API_URL}/employees/availability`, { params });
-        const data = response.data.data || response.data;
-        setAvailabilityData(Array.isArray(data) ? data : []);
-      } catch (apiError) {
-        console.warn('API not available, using mock data');
-        // Use mock data if API not ready
-        generateMockData();
+    try {
+      const dateRange = nextFilters.date_range;
+      if (!dateRange?.[0] || !dateRange?.[1]) {
+        throw new Error('Vui lòng chọn khoảng thời gian');
       }
+
+      const response = await api.get('/employees/availability', {
+        params: {
+          employee_ids: nextFilters.employee_ids.length > 0
+            ? nextFilters.employee_ids.join(',')
+            : undefined,
+          project_ids: nextFilters.project_ids.length > 0
+            ? nextFilters.project_ids.join(',')
+            : undefined,
+          start_date: dateRange[0].format('YYYY-MM-DD'),
+          end_date: dateRange[1].format('YYYY-MM-DD'),
+        },
+      });
+
+      const data = response.data || response;
+      setAvailabilityData(Array.isArray(data) ? data : []);
+      setLastUpdatedAt(dayjs());
     } catch (error) {
       console.error('Error loading availability:', error);
-      message.warning('Đang sử dụng dữ liệu mẫu (API chưa sẵn sàng)');
-      generateMockData();
+      setAvailabilityData([]);
+      setLoadError(error.message || 'Không thể tải tình trạng nhân viên');
+      message.error(error.message || 'Không thể tải tình trạng nhân viên');
     } finally {
       setLoading(false);
     }
   };
 
-  // Generate mock data for testing
-  const generateMockData = () => {
-    const filteredEmployees = filters.employee_ids.length > 0
-      ? employees.filter(e => filters.employee_ids.includes(e.id))
-      : employees;
+  const handleFilter = () => loadAvailability(filters);
 
-    const mockData = filteredEmployees.map(emp => {
-      const workloadPercent = Math.floor(Math.random() * 120);
-      const totalHours = Math.floor(Math.random() * 160);
-      const availableHours = 160;
-      const projectCount = Math.floor(Math.random() * 4);
-      
-      const busyProjects = projectCount > 0 ? Array.from({ length: projectCount }, (_, i) => ({
-        project_id: i + 1,
-        project_name: `Dự án ${i + 1}`,
-        role: ['Trưởng nhóm', 'Thợ chính', 'Thợ phụ'][Math.floor(Math.random() * 3)],
-        task_count: Math.floor(Math.random() * 5),
-        start_date: dayjs().subtract(Math.floor(Math.random() * 30), 'day').format('YYYY-MM-DD'),
-        end_date: dayjs().add(Math.floor(Math.random() * 60), 'day').format('YYYY-MM-DD'),
-        is_overdue: Math.random() > 0.8,
-        project_status: 'Đang thực hiện'
-      })) : [];
-
-      return {
-        ...emp,
-        workload_percentage: workloadPercent,
-        total_assigned_hours: totalHours,
-        available_hours: availableHours,
-        busy_projects: busyProjects,
-        total_tasks: Math.floor(Math.random() * 10),
-        total_projects: projectCount,
-        upcoming_tasks: projectCount > 0 ? [{
-          task_name: 'Lắp đặt chi nhánh 1',
-          task_type: 'Lắp đặt',
-          start_date: dayjs().add(2, 'day').format('YYYY-MM-DD')
-        }] : []
-      };
-    });
-
-    setAvailabilityData(mockData);
+  const handleResetFilters = () => {
+    const resetFilters = {
+      employee_ids: [],
+      date_range: [dayjs().startOf('week'), dayjs().endOf('week')],
+      project_ids: [],
+    };
+    setFilters(resetFilters);
+    loadAvailability(resetFilters);
   };
 
   const showEmployeeDetail = (employee) => {
@@ -330,6 +308,27 @@ const EmployeeAvailability = () => {
       </div>
 
 
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          closable
+          message="Không tải được dữ liệu tình trạng nhân viên"
+          description={loadError}
+          style={{ marginBottom: 16 }}
+          onClose={() => setLoadError('')}
+        />
+      )}
+
+      {lastUpdatedAt && !loadError && (
+        <Alert
+          type="info"
+          showIcon
+          message={`Dữ liệu thật từ hệ thống · cập nhật ${lastUpdatedAt.format('HH:mm:ss DD/MM/YYYY')}`}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
       {/* Filter Section */}
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={[16, 16]}>
@@ -364,6 +363,7 @@ const EmployeeAvailability = () => {
               style={{ width: '100%' }}
               format="DD/MM/YYYY"
               value={filters.date_range}
+              allowClear={false}
               onChange={(dates) => setFilters({ ...filters, date_range: dates })}
               presets={[
                 { label: 'Hôm nay', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
@@ -400,16 +400,26 @@ const EmployeeAvailability = () => {
 
           <Col xs={24} sm={12} lg={4}>
             <div style={{ marginBottom: 8 }}>&nbsp;</div>
-            <Button
-              type="primary"
-              icon={<FilterOutlined />}
-              onClick={handleFilter}
-              loading={loading}
-              block
-              size="large"
-            >
-              Lọc danh sách
-            </Button>
+            <Space.Compact block>
+              <Button
+                type="primary"
+                icon={<FilterOutlined />}
+                onClick={handleFilter}
+                loading={loading}
+                size="large"
+                style={{ flex: 1 }}
+              >
+                Lọc
+              </Button>
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={handleResetFilters}
+                disabled={loading}
+                size="large"
+              >
+                Đặt lại
+              </Button>
+            </Space.Compact>
           </Col>
         </Row>
 

@@ -125,6 +125,10 @@ const CATALOG_TYPES = {
   EMPLOYEE_POSITION: 'Vị trí nhân viên',
   DEPARTMENT: 'Phòng ban',
   SCHEDULE_TYPE: 'Loại lịch trình',
+  WAREHOUSE_TYPE: 'Loại kho',
+  MATERIAL_BRAND: 'Thương hiệu vật tư',
+  STORAGE_CONDITION: 'Điều kiện lưu trữ',
+  STOCK_ADJUSTMENT_REASON: 'Lý do điều chỉnh tồn kho',
 };
 const normalizeCatalogCode = (value) => String(value || '')
   .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -191,7 +195,10 @@ router.delete('/catalogs/:id', async (req,res)=>{
   try{
     const item=(await pool.query('SELECT * FROM system_catalogs WHERE id=$1',[req.params.id])).rows[0];
     if(!item) return res.status(404).json({success:false,message:'Không tìm thấy danh mục'});
-    const refs={DEPARTMENT:['employees','department'],EMPLOYEE_POSITION:['employees','position'],TASK_TYPE:['tasks','task_type'],SCHEDULE_TYPE:['schedules','schedule_type']};
+    const refs={
+      DEPARTMENT:['employees','department'],EMPLOYEE_POSITION:['employees','position'],TASK_TYPE:['tasks','task_type'],SCHEDULE_TYPE:['schedules','schedule_type'],
+      WAREHOUSE_TYPE:['warehouses','warehouse_type'],MATERIAL_BRAND:['materials','brand'],STORAGE_CONDITION:['materials','storage_condition']
+    };
     const ref=refs[item.catalog_type];
     if(ref){
       const used=await pool.query(`SELECT count(*)::int count FROM ${ref[0]} WHERE ${ref[1]}=$1`,[item.name]);

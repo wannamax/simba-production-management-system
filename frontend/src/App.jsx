@@ -25,6 +25,9 @@ import ReportWeekly from './pages/ReportWeekly';
 import ReportMonthly from './pages/ReportMonthly';
 import Notifications from './pages/Notifications';
 import DataTransfer from './pages/DataTransfer';
+import Settings from './pages/Settings';
+import MaterialList from './pages/MaterialList';
+import InventoryTransactions from './pages/InventoryTransactions';
 
 dayjs.locale('vi');
 
@@ -71,7 +74,10 @@ function App() {
             <Route path="reports/daily" element={<ReportDaily />} />
             <Route path="reports/weekly" element={<ReportWeekly />} />
             <Route path="reports/monthly" element={<ReportMonthly />} />
+            <Route path="materials" element={<MaterialList />} />
+            <Route path="inventory" element={<InventoryTransactions />} />
             <Route path="data-transfer" element={<DataTransfer />} />
+            <Route path="settings" element={<Settings />} />
             
             {/* 404 */}
             <Route path="*" element={<Navigate to="/" replace />} />

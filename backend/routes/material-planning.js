@@ -11,7 +11,8 @@ const fail = (res, status, message, details) => res.status(status).json({ succes
 async function getRequirement(client, id, lock = false) {
   const result = await client.query(`SELECT r.*, m.material_code, COALESCE(m.name,m.material_name) AS material_name,
     m.base_unit_id AS material_base_unit_id, m.standard_cost, u.name AS unit_name, u.symbol AS unit_symbol,
-    COALESCE((SELECT SUM(mr.reserved_quantity-mr.released_quantity) FROM material_reservations mr WHERE mr.requirement_id=r.id AND mr.status NOT IN ('RELEASED','CANCELLED')),0) AS reserved_quantity
+    COALESCE((SELECT SUM(mr.reserved_quantity-mr.released_quantity) FROM material_reservations mr WHERE mr.requirement_id=r.id AND mr.status NOT IN ('RELEASED','CANCELLED')),0) AS reserved_quantity,
+    COALESCE((SELECT SUM(mr.issued_quantity-mr.returned_quantity) FROM material_reservations mr WHERE mr.requirement_id=r.id),0) AS net_issued_quantity
     FROM project_material_requirements r
     JOIN materials m ON m.id=r.material_id
     JOIN material_units u ON u.id=r.base_unit_id
@@ -23,8 +24,9 @@ async function refreshRequirementStatus(client, requirementId) {
   const row = await getRequirement(client, requirementId, true);
   if (!row || row.status === 'CANCELLED' || row.status === 'COMPLETED') return row;
   const reserved = Number(row.reserved_quantity || 0);
+  const issued = Number(row.net_issued_quantity || 0);
   const planned = Number(row.planned_quantity || 0);
-  const status = reserved <= 0 ? (row.status === 'DRAFT' ? 'DRAFT' : 'APPROVED') : reserved + 1e-9 >= planned ? 'FULLY_RESERVED' : 'PARTIALLY_RESERVED';
+  const status = issued + 1e-9 >= planned ? 'COMPLETED' : issued > 0 ? 'PARTIALLY_ISSUED' : reserved <= 0 ? (row.status === 'DRAFT' ? 'DRAFT' : 'APPROVED') : reserved + 1e-9 >= planned ? 'FULLY_RESERVED' : 'PARTIALLY_RESERVED';
   const result = await client.query('UPDATE project_material_requirements SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING *', [status, requirementId]);
   return result.rows[0];
 }
@@ -36,13 +38,16 @@ router.get('/projects/:projectId', async (req, res, next) => {
       pool.query('SELECT id,project_code,project_name,start_date,end_date,status FROM projects WHERE id=$1', [projectId]),
       pool.query(`SELECT v.*,m.material_code,COALESCE(m.name,m.material_name) AS material_name,m.category_id,c.name AS category_name,
         u.name AS unit_name,u.symbol AS unit_symbol,t.task_name AS task_title,
-        COALESCE((SELECT json_agg(json_build_object('id',mr.id,'warehouse_id',mr.warehouse_id,'warehouse_name',w.name,'reserved_quantity',mr.reserved_quantity,'released_quantity',mr.released_quantity,'available_reserved_quantity',mr.reserved_quantity-mr.released_quantity,'status',mr.status,'created_at',mr.created_at) ORDER BY mr.created_at DESC)
+        COALESCE(a.net_issued_quantity,0) net_issued_quantity,COALESCE(a.actual_cost,0) actual_cost,
+        (v.estimated_total_cost-COALESCE(a.actual_cost,0))::numeric(18,4) cost_variance,
+        COALESCE((SELECT json_agg(json_build_object('id',mr.id,'warehouse_id',mr.warehouse_id,'location_id',mr.location_id,'warehouse_name',w.name,'reserved_quantity',mr.reserved_quantity,'issued_quantity',mr.issued_quantity,'returned_quantity',mr.returned_quantity,'released_quantity',mr.released_quantity,'available_reserved_quantity',mr.reserved_quantity-mr.issued_quantity-mr.released_quantity,'status',mr.status,'created_at',mr.created_at) ORDER BY mr.created_at DESC)
           FROM material_reservations mr JOIN warehouses w ON w.id=mr.warehouse_id WHERE mr.requirement_id=v.id),'[]'::json) AS reservations
         FROM v_project_material_planning v
         JOIN materials m ON m.id=v.material_id
         LEFT JOIN material_categories c ON c.id=m.category_id
         JOIN material_units u ON u.id=v.base_unit_id
         LEFT JOIN tasks t ON t.id=v.task_id
+        LEFT JOIN v_project_material_actuals a ON a.requirement_id=v.id
         WHERE v.project_id=$1 ORDER BY COALESCE(v.required_date,'9999-12-31'),m.material_code`, [projectId]),
       pool.query('SELECT id,warehouse_code,name,is_default FROM warehouses WHERE is_active=true ORDER BY is_default DESC,name')
     ]);
@@ -54,9 +59,11 @@ router.get('/projects/:projectId', async (req, res, next) => {
       acc.planned_quantity += Number(row.planned_quantity || 0);
       acc.reserved_quantity += Number(row.reserved_quantity || 0);
       acc.shortage_quantity += Number(row.shortage_quantity || 0);
+      acc.issued_quantity += Number(row.net_issued_quantity || 0);
+      acc.actual_cost += Number(row.actual_cost || 0);
       if (Number(row.shortage_quantity || 0) > 0) acc.shortage_items += 1;
       return acc;
-    }, { requirement_count: 0, shortage_items: 0, planned_quantity: 0, reserved_quantity: 0, shortage_quantity: 0, planned_cost: 0 });
+    }, { requirement_count: 0, shortage_items: 0, planned_quantity: 0, reserved_quantity: 0, shortage_quantity: 0, issued_quantity: 0, planned_cost: 0, actual_cost: 0 });
     res.json({ success: true, data: { project: project.rows[0], requirements: rows, warehouses: warehouses.rows, summary } });
   } catch (error) { next(error); }
 });

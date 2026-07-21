@@ -55,6 +55,8 @@ const formatCurrency = (value) => {
   }).format(value);
 };
 
+const totalActualCost = project => Number(project?.actual_cost || 0) + Number(project?.actual_material_cost || 0);
+
 const ProjectDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -311,10 +313,13 @@ const ProjectDetail = () => {
             {formatCurrency(project.budget)}
           </Descriptions.Item>
           <Descriptions.Item label="Chi phí thực tế">
-            {formatCurrency(project.actual_cost)}
+            {formatCurrency(totalActualCost(project))}
           </Descriptions.Item>
           <Descriptions.Item label="Còn lại">
-            {formatCurrency((project.budget || 0) - (project.actual_cost || 0))}
+            {formatCurrency(Number(project.budget || 0) - totalActualCost(project))}
+          </Descriptions.Item>
+          <Descriptions.Item label="Trong đó: vật tư thực tế">
+            {formatCurrency(project.actual_material_cost)}
           </Descriptions.Item>
           {project.description && (
             <Descriptions.Item label="Mô tả" span={3}>

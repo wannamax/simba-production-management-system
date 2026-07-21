@@ -3,6 +3,7 @@ import { Alert, Button, Card, Col, DatePicker, Form, Input, InputNumber, Modal, 
 import { CheckCircleOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SafetyCertificateOutlined, UndoOutlined, WarningOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 const PRIORITIES = [
@@ -20,6 +21,7 @@ const formatNumber = value => new Intl.NumberFormat('vi-VN', { maximumFractionDi
 const formatCurrency = value => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(Number(value || 0));
 
 export default function ProjectMaterialsPanel({ projectId }) {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState({ requirements: [], warehouses: [], summary: {} });
   const [materials, setMaterials] = useState([]);
@@ -131,9 +133,11 @@ export default function ProjectMaterialsPanel({ projectId }) {
     { title: 'Ngày cần', dataIndex: 'required_date', width: 110, render: value => value ? dayjs(value).format('DD/MM/YYYY') : '-' },
     { title: 'Dự trù', width: 110, align: 'right', render: (_, r) => `${formatNumber(r.planned_quantity)} ${r.unit_symbol}` },
     { title: 'Đã giữ', width: 110, align: 'right', render: (_, r) => `${formatNumber(r.reserved_quantity)} ${r.unit_symbol}` },
+    { title: 'Thực xuất', width: 110, align: 'right', render: (_, r) => `${formatNumber(r.net_issued_quantity)} ${r.unit_symbol}` },
     { title: 'Thiếu', width: 110, align: 'right', render: (_, r) => <span style={{ color: Number(r.shortage_quantity) > 0 ? '#cf1322' : '#389e0d', fontWeight: 600 }}>{formatNumber(r.shortage_quantity)} {r.unit_symbol}</span> },
     { title: 'Mức đáp ứng', width: 150, render: (_, r) => { const p = Math.min(100, Math.round(Number(r.reserved_quantity || 0) / Number(r.planned_quantity || 1) * 100)); return <Progress percent={p} size="small" status={p < 100 ? 'active' : 'success'} />; } },
     { title: 'Chi phí dự kiến', width: 145, align: 'right', render: (_, r) => formatCurrency(r.estimated_total_cost) },
+    { title: 'Chi phí thực tế', width: 145, align: 'right', render: (_, r) => formatCurrency(r.actual_cost) },
     { title: 'Trạng thái', width: 130, render: (_, r) => <Tag color={STATUS_COLORS[r.status]}>{STATUS_LABELS[r.status] || r.status}</Tag> },
     { title: 'Thao tác', fixed: 'right', width: 190, render: (_, r) => <Space size="small">
       <Tooltip title="Sửa"><Button size="small" icon={<EditOutlined />} disabled={['CANCELLED','COMPLETED'].includes(r.status)} onClick={() => openEdit(r)} /></Tooltip>
@@ -147,20 +151,20 @@ export default function ProjectMaterialsPanel({ projectId }) {
     <Row gutter={16} style={{ marginBottom: 16 }}>
       <Col xs={12} md={6}><Card><Statistic title="Dòng dự trù" value={data.summary?.requirement_count || 0} /></Card></Col>
       <Col xs={12} md={6}><Card><Statistic title="Vật tư còn thiếu" value={data.summary?.shortage_items || 0} valueStyle={{ color: data.summary?.shortage_items ? '#cf1322' : '#3f8600' }} prefix={data.summary?.shortage_items ? <WarningOutlined /> : <CheckCircleOutlined />} /></Card></Col>
-      <Col xs={12} md={6}><Card><Statistic title="Tổng số lượng thiếu" value={data.summary?.shortage_quantity || 0} precision={2} /></Card></Col>
-      <Col xs={12} md={6}><Card><Statistic title="Chi phí dự kiến" value={data.summary?.planned_cost || 0} formatter={formatCurrency} /></Card></Col>
+      <Col xs={12} md={6}><Card><Statistic title="Đã thực xuất" value={data.summary?.issued_quantity || 0} precision={2} /></Card></Col>
+      <Col xs={12} md={6}><Card><Statistic title="Chi phí thực tế" value={data.summary?.actual_cost || 0} formatter={formatCurrency} /></Card></Col>
     </Row>
-    <Alert showIcon type="info" style={{ marginBottom: 16 }} message="Dự trù không làm giảm tồn kho. Chỉ khi dự trù được duyệt và giữ hàng, tồn khả dụng mới giảm. Phiên bản này chưa nhập/xuất kho; số lượng giữ phụ thuộc số dư kho hiện tại." />
-    <Card title="Dự trù và giữ vật tư" extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Thêm dự trù</Button>}>
+    <Alert showIcon type="info" style={{ marginBottom: 16 }} message="Project Material Integration 2.4.0-D" description="Dự trù, giữ hàng, xuất cho dự án và trả vật tư thừa đã được liên kết. Chi phí thực tế lấy từ sổ giao dịch kho đã ghi sổ." />
+    <Card title="Dự trù và thực hiện vật tư" extra={<Space><Button onClick={() => navigate(`/inventory?project_id=${projectId}&type=RETURN_IN`)}>Trả vật tư</Button><Button onClick={() => navigate(`/inventory?project_id=${projectId}&type=ISSUE`)}>Xuất vật tư</Button><Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>Thêm dự trù</Button></Space>}>
       <Table loading={loading} dataSource={data.requirements || []} columns={columns} rowKey="id" scroll={{ x: 1500 }} pagination={{ pageSize: 20 }}
-        expandable={{ expandedRowRender: record => <div><strong>Phiếu giữ:</strong>{record.reservations?.length ? record.reservations.map(item => <Tag key={item.id} style={{ margin: 6 }}>{item.warehouse_name}: {formatNumber(item.available_reserved_quantity)} <Button type="link" size="small" icon={<UndoOutlined />} onClick={() => release(item)}>Giải phóng</Button></Tag>) : <span style={{ marginLeft: 8, color: '#999' }}>Chưa giữ vật tư</span>}</div> }} />
+        expandable={{ expandedRowRender: record => <div><strong>Phiếu giữ:</strong>{record.reservations?.length ? record.reservations.map(item => <Tag key={item.id} style={{ margin: 6 }}>{item.warehouse_name}: giữ {formatNumber(item.reserved_quantity)}, đã xuất {formatNumber(item.issued_quantity)}, đã trả {formatNumber(item.returned_quantity)}, còn giữ {formatNumber(item.available_reserved_quantity)} {Number(item.available_reserved_quantity)>0&&<Button type="link" size="small" icon={<UndoOutlined />} onClick={() => release(item)}>Giải phóng</Button>}</Tag>) : <span style={{ marginLeft: 8, color: '#999' }}>Chưa giữ vật tư</span>}</div> }} />
     </Card>
 
     <Modal title={editing ? 'Cập nhật dự trù vật tư' : 'Thêm dự trù vật tư'} open={requirementModal} onCancel={() => setRequirementModal(false)} onOk={() => form.submit()} width={720} destroyOnClose>
       <Form form={form} layout="vertical" onFinish={saveRequirement}>
         <Row gutter={16}>
           <Col span={12}><Form.Item name="material_id" label="Vật tư" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" disabled={Boolean(editing)} options={materials.map(m => ({ value: m.id, label: `${m.material_code} — ${m.name}` }))} /></Form.Item></Col>
-          <Col span={12}><Form.Item name="task_id" label="Nhiệm vụ (không bắt buộc)"><Select allowClear showSearch optionFilterProp="label" disabled={Boolean(editing)} options={tasks.map(t => ({ value: t.id, label: t.title }))} /></Form.Item></Col>
+          <Col span={12}><Form.Item name="task_id" label="Nhiệm vụ (không bắt buộc)"><Select allowClear showSearch optionFilterProp="label" disabled={Boolean(editing)} options={tasks.map(t => ({ value: t.id, label: t.task_name }))} /></Form.Item></Col>
           <Col span={8}><Form.Item name="planned_quantity" label={`Số lượng dự trù${material ? ` (${material.unit_symbol})` : ''}`} rules={[{ required: true }]}><InputNumber min={0.000001} style={{ width: '100%' }} /></Form.Item></Col>
           <Col span={8}><Form.Item name="estimated_unit_cost" label="Đơn giá dự kiến"><InputNumber min={0} style={{ width: '100%' }} formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} /></Form.Item></Col>
           <Col span={8}><Form.Item name="required_date" label="Ngày cần vật tư"><DatePicker style={{ width: '100%' }} format="DD/MM/YYYY" /></Form.Item></Col>

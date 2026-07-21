@@ -178,7 +178,10 @@ const Dashboard = () => {
   return (
     <div>
       <div className="page-header">
-        <h1>Tổng quan</h1>
+        <div>
+          <h1 style={{ marginBottom: 0 }}>Tổng quan</h1>
+          <Tag color="blue">{data.display_version || `Simba PMS - Version: ${data.version || '2.4.0-D'}`}</Tag>
+        </div>
       </div>
 
       {/* Statistics Cards */}

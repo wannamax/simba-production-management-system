@@ -1,0 +1,13 @@
+.DS_Store
+**/.DS_Store
+.env
+.hotfix-backup/
+node_modules/
+**/node_modules/
+.pnpm-store/
+**/.pnpm-store/
+dist/
+**/dist/
+uploads/
+**/uploads/
+*.log

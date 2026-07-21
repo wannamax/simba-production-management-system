@@ -152,9 +152,13 @@ const menuItems = [
     label: 'Import / Export',
   },
   {
-    key: '/materials',
+    key: 'materials-module',
     icon: <InboxOutlined />,
     label: 'Vật tư',
+    children: [
+      { key: '/materials', icon: <InboxOutlined />, label: 'Danh mục vật tư' },
+      { key: '/inventory', icon: <SwapOutlined />, label: 'Giao dịch kho' },
+    ],
   },
   {
     key: '/settings',
@@ -477,7 +481,7 @@ const getOpenKeys = () => {
           }}
         >
           <Text type="secondary" style={{ fontSize: 12 }}>
-            Production Management System © 2024 | Version 1.0.0
+            Simba PMS - Version: 2.4.0-D
           </Text>
         </div>
       </Layout>

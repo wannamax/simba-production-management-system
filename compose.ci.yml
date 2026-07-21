@@ -2,11 +2,11 @@ services:
   db:
     image: postgres:17.5-alpine
     environment:
-      POSTGRES_DB: production_management
-      POSTGRES_USER: pms_app
+      POSTGRES_DB: simba_pms
+      POSTGRES_USER: simba
       POSTGRES_PASSWORD: ci_password
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pms_app -d production_management"]
+      test: ["CMD-SHELL", "pg_isready -U simba -d simba_pms"]
       interval: 3s
       timeout: 3s
       retries: 30
@@ -17,8 +17,8 @@ services:
       PORT: 3000
       DB_HOST: db
       DB_PORT: 5432
-      DB_NAME: production_management
-      DB_USER: pms_app
+      DB_NAME: simba_pms
+      DB_USER: simba
       DB_PASSWORD: ci_password
     depends_on:
       db: {condition: service_healthy}

@@ -1,22 +1,22 @@
-name: Release Simba PMS 2.2.1
+name: Release Simba PMS 2.4.0-D
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - "v2.2.1"
+      - "v2.4.0-D"
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: release-simba-pms-2.2.1
+  group: release-simba-pms-2.4.0-D
   cancel-in-progress: false
 
 env:
   COMPOSE_FILE: compose.ci.yml
-  RELEASE_VERSION: "2.2.1"
+  RELEASE_VERSION: "2.4.0-D"
 
 jobs:
   test-amd64:
@@ -53,9 +53,9 @@ jobs:
           docker compose -f "$COMPOSE_FILE" exec -T db \
             psql \
               -v ON_ERROR_STOP=1 \
-              -U pms_app \
-              -d production_management \
-              -c "SELECT version, applied_at FROM schema_migrations ORDER BY applied_at;"
+              -U simba \
+              -d simba_pms \
+              -c "SELECT filename, applied_at FROM app_schema_migrations ORDER BY applied_at;"
 
       - name: Verify backend health
         run: |
@@ -90,32 +90,62 @@ jobs:
             backend \
             node tests/integration-smoke.js
 
+      - name: Test Schedule and Notifications
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/schedule-notifications-smoke.js
+
+      - name: Test Material Master Data 2.4.0-A
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/material-master-data-smoke.js
+
+      - name: Test Material Planning and Reservations 2.4.0-B1
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/material-planning-reservations-smoke.js
+
+      - name: Test Inventory Transactions 2.4.0-C
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/inventory-transactions-smoke.js
+
+      - name: Test Project Material Integration 2.4.0-D
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/project-material-integration-smoke.js
+
       - name: Test database backup and restore
         run: |
           docker compose -f "$COMPOSE_FILE" exec -T db \
             pg_dump \
-              -U pms_app \
+              -U simba \
               -Fc \
-              production_management \
+              simba_pms \
               > /tmp/pms-ci.dump
 
           test -s /tmp/pms-ci.dump
 
           docker compose -f "$COMPOSE_FILE" exec -T db \
             dropdb \
-              -U pms_app \
+              -U simba \
               --if-exists \
               restore_test
 
           docker compose -f "$COMPOSE_FILE" exec -T db \
             createdb \
-              -U pms_app \
+              -U simba \
               restore_test
 
           cat /tmp/pms-ci.dump |
             docker compose -f "$COMPOSE_FILE" exec -T db \
               pg_restore \
-                -U pms_app \
+                -U simba \
                 -d restore_test \
                 --no-owner \
                 --no-privileges \
@@ -124,9 +154,9 @@ jobs:
           docker compose -f "$COMPOSE_FILE" exec -T db \
             psql \
               -v ON_ERROR_STOP=1 \
-              -U pms_app \
+              -U simba \
               -d restore_test \
-              -c "SELECT count(*) AS migration_count FROM schema_migrations;"
+              -c "SELECT count(*) AS migration_count FROM app_schema_migrations;"
 
       - name: Show container logs on failure
         if: failure()
@@ -201,7 +231,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:${{ env.RELEASE_VERSION }}
-            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.2
+            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.4
           labels: |
             org.opencontainers.image.title=Simba PMS ${{ matrix.name }}
             org.opencontainers.image.version=${{ env.RELEASE_VERSION }}

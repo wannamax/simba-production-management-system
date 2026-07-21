@@ -340,9 +340,9 @@ const EmployeeList = () => {
               setFilters({ ...filters, department: value || '' })
             }
           >
-            {DEPARTMENTS.map((dept) => (
-              <Option key={dept} value={dept}>
-                {dept}
+            {departments.map((item) => (
+              <Option key={item.id} value={item.name}>
+                {item.name}
               </Option>
             ))}
           </Select>
