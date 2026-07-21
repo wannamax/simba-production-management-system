@@ -31,8 +31,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { employeeAPI } from '../services/api';
-import { DEPARTMENTS, POSITIONS } from '../utils/constants';
+import { employeeAPI, settingsAPI } from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -44,15 +43,22 @@ const EmployeeList = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [form] = Form.useForm();
+  const [departments, setDepartments] = useState([]);
+  const [positions, setPositions] = useState([]);
   const [filters, setFilters] = useState({
     department: '',
     status: 'Hoạt động',
     search: '',
   });
 
+  useEffect(() => { loadEmployees(); }, [filters]);
   useEffect(() => {
-    loadEmployees();
-  }, [filters]);
+    Promise.all([
+      settingsAPI.getCatalogs({ type: 'DEPARTMENT' }),
+      settingsAPI.getCatalogs({ type: 'EMPLOYEE_POSITION' }),
+    ]).then(([d,p]) => { setDepartments(d.data || []); setPositions(p.data || []); })
+      .catch(e => message.warning(e.message || 'Không thể tải danh mục nhân sự'));
+  }, []);
 
   const loadEmployees = async () => {
     setLoading(true);
@@ -432,10 +438,8 @@ const EmployeeList = () => {
                 ]}
               >
                 <Select placeholder="Chọn vị trí">
-                  {POSITIONS.map((pos) => (
-                    <Option key={pos} value={pos}>
-                      {pos}
-                    </Option>
+                  {positions.map((pos) => (
+                    <Option key={pos.id} value={pos.name}>{pos.name}</Option>
                   ))}
                 </Select>
               </Form.Item>
@@ -449,10 +453,8 @@ const EmployeeList = () => {
                 ]}
               >
                 <Select placeholder="Chọn phòng ban">
-                  {DEPARTMENTS.map((dept) => (
-                    <Option key={dept} value={dept}>
-                      {dept}
-                    </Option>
+                  {departments.map((dept) => (
+                    <Option key={dept.id} value={dept.name}>{dept.name}</Option>
                   ))}
                 </Select>
               </Form.Item>

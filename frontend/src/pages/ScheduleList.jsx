@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Card, DatePicker, Form, Input, Modal, Popconfirm, Progress, Select, Space, Table, Tag, message } from 'antd';
 import { CalendarOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { scheduleAPI, projectAPI, employeeAPI } from '../services/api';
-import { SCHEDULE_STATUS_COLORS, SCHEDULE_TYPES, PRIORITY_COLORS } from '../utils/constants';
+import { scheduleAPI, projectAPI, employeeAPI, settingsAPI } from '../services/api';
+import { SCHEDULE_STATUS_COLORS, PRIORITY_COLORS } from '../utils/constants';
 
 const { Option } = Select;
 const { RangePicker } = DatePicker;
@@ -17,6 +17,7 @@ const ScheduleList = () => {
   const [editing, setEditing] = useState(null);
   const [filters, setFilters] = useState({});
   const [form] = Form.useForm();
+  const [scheduleTypes, setScheduleTypes] = useState([]);
 
   const loadSchedules = async (next = filters) => {
     setLoading(true);
@@ -31,9 +32,11 @@ const ScheduleList = () => {
     Promise.all([
       projectAPI.getAll({ limit: 1000 }),
       employeeAPI.getAll({ status: 'Hoạt động', limit: 1000 }),
-    ]).then(([p, e]) => {
+      settingsAPI.getCatalogs({ type: 'SCHEDULE_TYPE' }),
+    ]).then(([p, e, types]) => {
       setProjects(p.data || []);
       setEmployees(e.data || []);
+      setScheduleTypes(types.data || []);
     }).catch(() => message.warning('Không thể tải đầy đủ dữ liệu bộ lọc'));
     loadSchedules({});
   }, []);
@@ -119,7 +122,7 @@ const ScheduleList = () => {
       <Form form={form} layout="vertical" onFinish={submit}>
         <Form.Item name="project_id" label="Dự án" rules={[{ required: true }]}><Select showSearch optionFilterProp="children">{projects.map(p => <Option key={p.id} value={p.id}>{p.project_code} - {p.project_name}</Option>)}</Select></Form.Item>
         <Space style={{ display: 'flex' }} align="start">
-          <Form.Item name="schedule_type" label="Loại" rules={[{ required: true }]} style={{ flex: 1 }}><Select>{Object.values(SCHEDULE_TYPES).map(v => <Option key={v} value={v}>{v}</Option>)}</Select></Form.Item>
+          <Form.Item name="schedule_type" label="Loại" rules={[{ required: true }]} style={{ flex: 1 }}><Select>{scheduleTypes.map(item => <Option key={item.id} value={item.name}>{item.name}</Option>)}</Select></Form.Item>
           <Form.Item name="status" label="Trạng thái" rules={[{ required: true }]} style={{ flex: 1 }}><Select>{Object.keys(SCHEDULE_STATUS_COLORS).map(v => <Option key={v} value={v}>{v}</Option>)}</Select></Form.Item>
           <Form.Item name="priority" label="Ưu tiên" style={{ flex: 1 }}><Select>{['Thấp','Trung bình','Cao','Khẩn cấp'].map(v => <Option key={v} value={v}>{v}</Option>)}</Select></Form.Item>
         </Space>

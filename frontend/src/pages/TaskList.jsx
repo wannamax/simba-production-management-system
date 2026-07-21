@@ -46,6 +46,7 @@ const TaskList = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [form] = Form.useForm();
+  const [taskTypes, setTaskTypes] = useState([]);
   const [filters, setFilters] = useState({
     project_id: '',
     task_type: '',
@@ -55,6 +56,7 @@ const TaskList = () => {
   });
 
   useEffect(() => {
+    settingsAPI.getCatalogs({ type: 'TASK_TYPE' }).then(r => setTaskTypes(r.data || [])).catch(e => message.warning(e.message));
     loadTasks();
     loadProjects();
   }, [filters]);
@@ -517,10 +519,8 @@ const TaskList = () => {
                 label="Loại nhiệm vụ"
                 rules={[{ required: true, message: 'Vui lòng chọn loại nhiệm vụ' }]}
               >
-                <Select placeholder="Chọn loại">
-                  <Option value="Sản xuất">Sản xuất</Option>
-                  <Option value="Giao hàng">Giao hàng</Option>
-                  <Option value="Lắp đặt">Lắp đặt</Option>
+                <Select placeholder="Chọn loại" showSearch optionFilterProp="children">
+                  {taskTypes.map(item => <Option key={item.id} value={item.name}>{item.name}</Option>)}
                 </Select>
               </Form.Item>
             </Col>

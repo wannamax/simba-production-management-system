@@ -2,6 +2,19 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
 
+
+async function ensureActiveCatalog(catalogType, name) {
+  const result = await pool.query(
+    'SELECT 1 FROM system_catalogs WHERE catalog_type=$1 AND name=$2 AND is_active=true',
+    [catalogType, name]
+  );
+  if (!result.rowCount) {
+    const error = new Error(`Giá trị “${name}” không tồn tại hoặc đã ngừng sử dụng trong danh mục ${catalogType}`);
+    error.status = 400;
+    throw error;
+  }
+}
+
 const ALLOWED_STATUS = ['Chưa bắt đầu', 'Đang thực hiện', 'Tạm dừng', 'Hoàn thành', 'Hủy'];
 const ALLOWED_PRIORITY = ['Thấp', 'Trung bình', 'Cao', 'Khẩn cấp'];
 
@@ -119,6 +132,7 @@ router.post('/', async (req, res, next) => {
   try {
     await client.query('BEGIN');
     const b = req.body;
+    await ensureActiveCatalog('SCHEDULE_TYPE', b.schedule_type);
     const result = await client.query(
       `INSERT INTO schedules
        (project_id,schedule_type,title,description,location,location_address,location_contact,location_phone,
@@ -148,6 +162,7 @@ router.put('/:id', async (req, res, next) => {
   try {
     await client.query('BEGIN');
     const b = req.body;
+    await ensureActiveCatalog('SCHEDULE_TYPE', b.schedule_type);
     const result = await client.query(
       `UPDATE schedules SET
        project_id=$1,schedule_type=$2,title=$3,description=$4,location=$5,location_address=$6,

@@ -4,6 +4,19 @@ const pool = require('../config/database');
 const CodeGenerator = require('../utils/codeGenerator');
 const { body, validationResult } = require('express-validator');
 
+
+async function ensureActiveCatalog(catalogType, name) {
+  const result = await pool.query(
+    'SELECT 1 FROM system_catalogs WHERE catalog_type=$1 AND name=$2 AND is_active=true',
+    [catalogType, name]
+  );
+  if (!result.rowCount) {
+    const error = new Error(`Giá trị “${name}” không tồn tại hoặc đã ngừng sử dụng trong danh mục ${catalogType}`);
+    error.status = 400;
+    throw error;
+  }
+}
+
 const validateEmployee = [
   body('full_name').notEmpty().withMessage('Họ tên không được trống'),
   body('position').notEmpty().withMessage('Vị trí không được trống'),
@@ -53,6 +66,206 @@ router.get('/', async (req, res, next) => {
       data: result.rows
     });
   } catch (error) {
+    next(error);
+  }
+});
+
+// GET employee availability with real filters
+// IMPORTANT: this route must be declared before /:id.
+router.get('/availability', async (req, res, next) => {
+  try {
+    const parseIdList = (value, fieldName) => {
+      if (!value) return null;
+      const ids = String(value)
+        .split(',')
+        .map((item) => Number.parseInt(item.trim(), 10));
+
+      if (ids.length === 0 || ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+        const error = new Error(`${fieldName} không hợp lệ`);
+        error.status = 400;
+        throw error;
+      }
+      return [...new Set(ids)];
+    };
+
+    const employeeIds = parseIdList(req.query.employee_ids, 'Danh sách nhân viên');
+    const projectIds = parseIdList(req.query.project_ids, 'Danh sách dự án');
+    const startDate = req.query.start_date || new Date().toISOString().slice(0, 10);
+    const endDate = req.query.end_date || startDate;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ngày bắt đầu hoặc ngày kết thúc không hợp lệ',
+      });
+    }
+
+    if (startDate > endDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ngày bắt đầu không được lớn hơn ngày kết thúc',
+      });
+    }
+
+    const query = `
+      WITH date_capacity AS (
+        SELECT (COUNT(*) FILTER (WHERE EXTRACT(ISODOW FROM day) <= 5) * 8)::numeric AS available_hours
+        FROM generate_series($1::date, $2::date, interval '1 day') AS day
+      ),
+      workload_rows AS (
+        SELECT
+          ta.employee_id,
+          t.id AS task_id,
+          t.task_name,
+          t.task_type,
+          t.start_date,
+          t.end_date,
+          t.status AS task_status,
+          p.id AS project_id,
+          p.project_name,
+          p.project_code,
+          p.status AS project_status,
+          p.start_date AS project_start_date,
+          p.end_date AS project_end_date,
+          COALESCE(pa.role, ta.role_in_task, 'Thành viên') AS role,
+          CASE
+            WHEN COALESCE(ta.total_hours, 0) > 0 THEN ta.total_hours
+            WHEN COALESCE(t.estimated_hours, 0) > 0 THEN
+              t.estimated_hours / GREATEST((
+                SELECT COUNT(*)
+                FROM task_assignments active_ta
+                WHERE active_ta.task_id = t.id AND active_ta.is_active = TRUE
+              ), 1)
+            ELSE 0
+          END::numeric AS assigned_hours
+        FROM task_assignments ta
+        JOIN tasks t ON t.id = ta.task_id
+        JOIN projects p ON p.id = t.project_id
+        LEFT JOIN project_assignments pa
+          ON pa.project_id = p.id AND pa.employee_id = ta.employee_id
+        WHERE ta.is_active = TRUE
+          AND COALESCE(t.is_archived, FALSE) = FALSE
+          AND t.status NOT IN ('Tạm dừng', 'Hủy', 'Hoàn thành', 'Lưu trữ')
+          AND p.deleted_at IS NULL
+          AND p.status NOT IN ('Hoàn thành', 'Hủy', 'Lưu trữ')
+          AND COALESCE(ta.start_date, t.start_date, p.start_date, $1::date) <= $2::date
+          AND COALESCE(ta.end_date, t.end_date, p.end_date, $2::date) >= $1::date
+          AND ($4::int[] IS NULL OR p.id = ANY($4::int[]))
+      ),
+      employee_totals AS (
+        SELECT
+          employee_id,
+          COUNT(DISTINCT task_id)::int AS total_tasks,
+          COUNT(DISTINCT project_id)::int AS total_projects,
+          COALESCE(SUM(assigned_hours), 0)::numeric AS total_assigned_hours
+        FROM workload_rows
+        GROUP BY employee_id
+      ),
+      project_totals AS (
+        SELECT
+          employee_id,
+          project_id,
+          project_name,
+          project_code,
+          project_status,
+          role,
+          MIN(project_start_date) AS start_date,
+          MAX(project_end_date) AS end_date,
+          COUNT(DISTINCT task_id)::int AS task_count,
+          COALESCE(SUM(assigned_hours), 0)::numeric AS assigned_hours
+        FROM workload_rows
+        GROUP BY employee_id, project_id, project_name, project_code, project_status, role
+      )
+      SELECT
+        e.id,
+        e.id AS employee_id,
+        e.employee_code,
+        e.full_name,
+        e.department,
+        e.position,
+        e.phone,
+        e.email,
+        e.status,
+        dc.available_hours,
+        COALESCE(et.total_assigned_hours, 0) AS total_assigned_hours,
+        CASE
+          WHEN dc.available_hours > 0
+            THEN ROUND((COALESCE(et.total_assigned_hours, 0) / dc.available_hours) * 100, 2)
+          ELSE 0
+        END AS workload_percentage,
+        COALESCE(et.total_tasks, 0) AS total_tasks,
+        COALESCE(et.total_projects, 0) AS total_projects,
+        COALESCE((
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'project_id', pt.project_id,
+              'project_name', pt.project_name,
+              'project_code', pt.project_code,
+              'project_status', pt.project_status,
+              'role', pt.role,
+              'task_count', pt.task_count,
+              'assigned_hours', pt.assigned_hours,
+              'start_date', pt.start_date,
+              'end_date', pt.end_date,
+              'is_overdue', CASE
+                WHEN pt.end_date < CURRENT_DATE
+                  AND pt.project_status NOT IN ('Hoàn thành', 'Hủy') THEN TRUE
+                ELSE FALSE
+              END
+            ) ORDER BY pt.project_name
+          )
+          FROM project_totals pt
+          WHERE pt.employee_id = e.id
+        ), '[]'::jsonb) AS busy_projects,
+        COALESCE((
+          SELECT jsonb_agg(task_item ORDER BY task_item->>'start_date')
+          FROM (
+            SELECT DISTINCT jsonb_build_object(
+              'task_id', wr.task_id,
+              'task_name', wr.task_name,
+              'task_type', wr.task_type,
+              'project_id', wr.project_id,
+              'project_name', wr.project_name,
+              'start_date', wr.start_date,
+              'end_date', wr.end_date,
+              'status', wr.task_status
+            ) AS task_item
+            FROM workload_rows wr
+            WHERE wr.employee_id = e.id
+              AND COALESCE(wr.start_date, $1::date) >= CURRENT_DATE
+            LIMIT 10
+          ) upcoming
+        ), '[]'::jsonb) AS upcoming_tasks
+      FROM employees e
+      CROSS JOIN date_capacity dc
+      LEFT JOIN employee_totals et ON et.employee_id = e.id
+      WHERE e.status = 'Hoạt động'
+        AND ($3::int[] IS NULL OR e.id = ANY($3::int[]))
+        AND ($4::int[] IS NULL OR EXISTS (
+          SELECT 1 FROM workload_rows filtered_workload
+          WHERE filtered_workload.employee_id = e.id
+        ))
+      ORDER BY e.full_name;
+    `;
+
+    const result = await pool.query(query, [startDate, endDate, employeeIds, projectIds]);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      meta: {
+        start_date: startDate,
+        end_date: endDate,
+        employee_ids: employeeIds || [],
+        project_ids: projectIds || [],
+        total: result.rows.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error in GET /employees/availability:', error);
+    if (error.status === 400) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
     next(error);
   }
 });
@@ -145,6 +358,8 @@ router.post('/', validateEmployee, async (req, res, next) => {
       notes
     } = req.body;
     
+    await ensureActiveCatalog('EMPLOYEE_POSITION', position);
+    await ensureActiveCatalog('DEPARTMENT', department);
     const employeeCode = await CodeGenerator.generateEmployeeCode();
     
     const result = await pool.query(
@@ -202,6 +417,8 @@ router.put('/:id', validateEmployee, async (req, res, next) => {
       notes
     } = req.body;
     
+    await ensureActiveCatalog('EMPLOYEE_POSITION', position);
+    await ensureActiveCatalog('DEPARTMENT', department);
     const result = await pool.query(
       `UPDATE employees SET 
         full_name = $1,
@@ -404,87 +621,4 @@ router.get('/available/for-task', async (req, res, next) => {
   }
 });
 
-// GET employee availability with filters (UPDATED - exclude paused/cancelled tasks)
-// GET employee availability (FIXED - exclude deleted projects)
-router.get('/availability', async (req, res, next) => {
-  try {
-    const {
-      employee_ids,
-      project_ids,
-      start_date,
-      end_date,
-    } = req.query;
-
-    // Use the view we created
-    let query = `
-      SELECT 
-        vew.*,
-        160 as available_hours,
-        ROUND((vew.total_busy_hours / 160.0) * 100, 2) as workload_percentage,
-        COALESCE(
-          (
-            SELECT json_agg(
-              json_build_object(
-                'project_id', p.id,
-                'project_name', p.project_name,
-                'project_code', p.project_code,
-                'role', pa.role,
-                'task_count', (
-                  SELECT COUNT(*) 
-                  FROM tasks t2 
-                  INNER JOIN task_assignments ta2 ON t2.id = ta2.task_id
-                  WHERE t2.project_id = p.id 
-                    AND ta2.employee_id = vew.employee_id
-                    AND ta2.is_active = TRUE
-                    AND t2.status NOT IN ('Tạm dừng', 'Hủy', 'Hoàn thành', 'Lưu trữ')
-                ),
-                'start_date', p.start_date,
-                'end_date', p.end_date,
-                'is_overdue', CASE 
-                  WHEN p.end_date < CURRENT_DATE AND p.status NOT IN ('Hoàn thành', 'Hủy') 
-                  THEN true 
-                  ELSE false 
-                END
-              )
-            )
-            FROM (
-              SELECT DISTINCT p.id, p.project_name, p.project_code, p.start_date, p.end_date, p.status, pa.role
-              FROM projects p
-              INNER JOIN tasks t ON p.id = t.project_id
-              INNER JOIN task_assignments ta ON t.id = ta.task_id
-              LEFT JOIN project_assignments pa ON p.id = pa.project_id AND pa.employee_id = ta.employee_id
-              WHERE ta.employee_id = vew.employee_id
-                AND ta.is_active = TRUE
-                AND t.status NOT IN ('Tạm dừng', 'Hủy', 'Hoàn thành', 'Lưu trữ')
-                AND p.deleted_at IS NULL
-            ) p
-          ),
-          '[]'::json
-        ) as busy_projects
-      FROM v_employee_real_workload vew
-      WHERE 1=1
-    `;
-
-    const params = [];
-    let paramIndex = 1;
-
-    if (employee_ids) {
-      query += ` AND vew.employee_id = ANY($${paramIndex}::int[])`;
-      params.push(`{${employee_ids}}`);
-      paramIndex++;
-    }
-
-    query += ' ORDER BY vew.full_name';
-
-    const result = await pool.query(query, params);
-
-    res.json({
-      success: true,
-      data: result.rows,
-    });
-  } catch (error) {
-    console.error('Error in GET /employees/availability:', error);
-    next(error);
-  }
-});
 module.exports = router;

@@ -169,4 +169,20 @@ export const dataTransferAPI = {
   },
 };
 
+// ==================== SETTINGS ====================
+export const settingsAPI = {
+  getCompany: () => api.get('/settings/company'),
+  updateCompany: (data) => api.put('/settings/company', data),
+  getProvinces: () => api.get('/settings/administrative/provinces'),
+  getCommunes: (provinceCode) => api.get('/settings/administrative/communes', { params: { province_code: provinceCode } }),
+  getAdministrativeMeta: () => api.get('/settings/administrative/meta'),
+  syncAdministrative: (provinceCodes) => api.post('/settings/administrative/sync', provinceCodes ? { province_codes: provinceCodes } : {}),
+  importAdministrative: (file) => { const formData = new FormData(); formData.append('file', file); return api.post('/settings/administrative/import', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 }); },
+  getCatalogTypes: () => api.get('/settings/catalogs/types'),
+  getCatalogs: (params) => api.get('/settings/catalogs', { params }),
+  createCatalog: (data) => api.post('/settings/catalogs', data),
+  updateCatalog: (id, data) => api.put(`/settings/catalogs/${id}`, data),
+  deleteCatalog: (id) => api.delete(`/settings/catalogs/${id}`),
+};
+
 export default api;

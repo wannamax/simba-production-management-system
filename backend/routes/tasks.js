@@ -18,6 +18,19 @@ const upload = multer({
   },
 });
 
+
+async function ensureActiveCatalog(catalogType, name) {
+  const result = await pool.query(
+    'SELECT 1 FROM system_catalogs WHERE catalog_type=$1 AND name=$2 AND is_active=true',
+    [catalogType, name]
+  );
+  if (!result.rowCount) {
+    const error = new Error(`Giá trị “${name}” không tồn tại hoặc đã ngừng sử dụng trong danh mục ${catalogType}`);
+    error.status = 400;
+    throw error;
+  }
+}
+
 const validateTask = [
   body('project_id').isInt().withMessage('Dự án không hợp lệ'),
   body('task_type').notEmpty().withMessage('Loại nhiệm vụ không được trống'),
@@ -196,6 +209,7 @@ router.post('/', validateTask, async (req, res, next) => {
       notes,
     } = req.body;
 
+    await ensureActiveCatalog('TASK_TYPE', task_type);
     // Generate task code
     const taskCode = await CodeGenerator.generateTaskCode(task_type);
 
@@ -266,6 +280,7 @@ router.put('/:id', validateTask, async (req, res, next) => {
       notes,
     } = req.body;
 
+    await ensureActiveCatalog('TASK_TYPE', task_type);
     const result = await pool.query(
       `UPDATE tasks SET
         project_id = $1,
