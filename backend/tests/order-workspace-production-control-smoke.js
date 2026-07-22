@@ -24,6 +24,8 @@ async function request(path,options={}){
     assert.equal(productionList.status,200,JSON.stringify(productionList.body));assert.equal(productionList.body.data.length,1);
     assert.equal(Number(productionList.body.data[0].id),Number(production.id));assert.equal(productionList.body.data[0].items.length,1);
     assert.equal(Number(productionList.body.data[0].items[0].order_item_id),Number(itemId));
+    const partialOrderList=await request(`/orders?project_id=${projectId}`);assert.equal(partialOrderList.status,200);
+    assert.equal(partialOrderList.body.data.find(row=>Number(row.id)===Number(orderId)).has_remaining_quantity,true);
 
     const workspace=await request(`/orders/${orderId}`);assert.equal(workspace.status,200);assert.equal(workspace.body.data.items.length,2);
     assert.equal(workspace.body.data.production_orders.length,1);assert.equal(workspace.body.data.production_orders[0].items.length,1);

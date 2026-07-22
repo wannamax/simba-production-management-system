@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Badge, Button, Card, Checkbox, Col, DatePicker, Descriptions, Divider, Empty,
   Form, Input, InputNumber, Modal, Progress, Row, Select, Space, Statistic,
-  Steps, Table, Tabs, Tag, Typography, message,
+  Table, Tabs, Tag, Typography, message,
 } from 'antd';
 import { DeleteOutlined, EyeOutlined, PlusOutlined, ToolOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
@@ -225,6 +225,7 @@ export default function OrderList() {
     setStartModal(false); await openPlan(order);
   };
   const openPlan = async order => {
+    if(order.has_remaining_quantity===false)return message.warning('Đơn hàng đã được lập Kế hoạch đủ toàn bộ số lượng');
     try {
       const response = await productionWorkflowAPI.getContext(order.id);
       const data = response.data;
@@ -364,7 +365,10 @@ export default function OrderList() {
   const roleOptions = (context?.roles || []).map(item => ({ value: item.name, label: item.name }));
   const supervisorRole = (context?.roles || []).find(item => /giám sát|quản lý/i.test(item.name))?.name || (context?.roles || []).find(item => item.is_default)?.name || (context?.roles || [])[0]?.name;
   const stats = useMemo(() => ({ total: rows.length, notStarted: rows.filter(x => x.status === 'NOT_STARTED').length, production: rows.filter(x => x.status === 'IN_PRODUCTION').length, value: rows.reduce((sum, x) => sum + Number(x.total_amount || 0), 0) }), [rows]);
-  const startOrders = rows.filter(row => ['NOT_STARTED', 'IN_PRODUCTION'].includes(row.status) && (!startProjectId || Number(row.project_id) === Number(startProjectId)));
+  const eligibleOrders = rows.filter(row => ['NOT_STARTED', 'IN_PRODUCTION'].includes(row.status) && row.has_remaining_quantity !== false);
+  const startOrders = eligibleOrders.filter(row => !startProjectId || Number(row.project_id) === Number(startProjectId));
+  const canCreatePlan = linkedOrderId ? eligibleOrders.some(row => Number(row.id) === Number(linkedOrderId)) : eligibleOrders.length > 0;
+  const eligibleProjectIds = new Set(eligibleOrders.map(row => Number(row.project_id)));
   const columns = [
     { title: 'Đơn hàng', key: 'order', render: (_, row) => <Space direction="vertical" size={0}><a onClick={() => openDetail(row.id)}><strong>{row.order_code}</strong></a><Text type="secondary">{formatDate(row.order_date)}</Text></Space> },
     { title: 'Dự án / Khách hàng', key: 'project', render: (_, row) => <Space direction="vertical" size={0}><Text strong>{row.project_name}</Text><Text type="secondary">{row.company_name || '-'}</Text></Space> },
@@ -372,7 +376,7 @@ export default function OrderList() {
     { title: 'Giá trị', dataIndex: 'total_amount', align: 'right', render: money },
     { title: 'Lệnh SX', dataIndex: 'production_order_count', width: 90, render: value => <Badge count={value} showZero color="#1677ff" /> },
     { title: 'Trạng thái', dataIndex: 'status', render: value => <Tag color={orderStatus[value]?.[1]}>{orderStatus[value]?.[0] || value}</Tag> },
-    { title: 'Thao tác', width: 520, render: (_, row) => <Space wrap><Button icon={<EyeOutlined />} onClick={() => openDetail(row.id)}>Mở</Button><Button onClick={() => openProductionList(row)}>Danh sách Lệnh liên quan</Button>{['NOT_STARTED', 'IN_PRODUCTION'].includes(row.status) && <Button type="primary" icon={<ToolOutlined />} onClick={() => openPlan(row)}>Lập Lệnh SX</Button>}{row.status !== 'CANCELLED' && <Button danger onClick={() => cancelOrder(row)}>Hủy</Button>}<Button danger icon={<DeleteOutlined />} onClick={() => deleteOrder(row)}>Xóa</Button></Space> },
+    { title: 'Thao tác', width: 560, render: (_, row) => <Space wrap><Button icon={<EyeOutlined />} onClick={() => openDetail(row.id)}>Mở</Button><Button onClick={() => openProductionList(row)}>Danh sách Lệnh liên quan</Button>{['NOT_STARTED', 'IN_PRODUCTION'].includes(row.status) && <Button type="primary" icon={<ToolOutlined />} disabled={row.has_remaining_quantity===false} title={row.has_remaining_quantity===false?'Đã lập Kế hoạch đủ số lượng':''} onClick={() => openPlan(row)}>Tạo Kế hoạch sản xuất</Button>}{row.status !== 'CANCELLED' && <Button danger onClick={() => cancelOrder(row)}>Hủy</Button>}<Button danger icon={<DeleteOutlined />} onClick={() => deleteOrder(row)}>Xóa</Button></Space> },
   ];
   const productionColumns = [
     {title:'Lệnh sản xuất',key:'production',width:190,render:(_,row)=><Space direction="vertical" size={0}><a onClick={()=>showProduction(row.id)}><strong>{row.production_code}</strong></a><Text type="secondary">{row.plan_code||'Không có mã Kế hoạch'}</Text></Space>},
@@ -403,7 +407,7 @@ export default function OrderList() {
         <Col xs={24} md={9}><Text type="secondary">Khoảng thời gian</Text><DatePicker.RangePicker format="DD/MM/YYYY" style={{width:'100%',marginTop:6}} value={productionFromDate&&productionToDate?[dayjs(productionFromDate),dayjs(productionToDate)]:null} onChange={values=>updateWorkspaceQuery({from_date:values?.[0]?.format('YYYY-MM-DD')||'',to_date:values?.[1]?.format('YYYY-MM-DD')||'',production_id:''})}/></Col>
         <Col xs={16} md={7}><Text type="secondary">Sắp xếp</Text><Select style={{width:'100%',marginTop:6}} value={productionSortBy} options={[{value:'project',label:'Theo Dự án'},{value:'start_date',label:'Theo thời gian bắt đầu'},{value:'status',label:'Theo Trạng thái'},{value:'created_at',label:'Theo thời gian tạo'},{value:'production_code',label:'Theo mã Lệnh SX'}]} onChange={value=>updateWorkspaceQuery({sort_by:value})}/></Col>
         <Col xs={8} md={4}><Text type="secondary">Thứ tự</Text><Select style={{width:'100%',marginTop:6}} value={productionSortDir} options={[{value:'asc',label:'Tăng dần'},{value:'desc',label:'Giảm dần'}]} onChange={value=>updateWorkspaceQuery({sort_dir:value})}/></Col>
-        <Col xs={24} md={13}><Space wrap><Button onClick={()=>updateWorkspaceQuery({project_id:'',order_id:'',production_id:'',production_status:'',from_date:'',to_date:'',sort_by:'start_date',sort_dir:'asc'})}>Xóa bộ lọc</Button><Button type="primary" icon={<ToolOutlined/>} onClick={openStart}>Tạo Lệnh sản xuất mới</Button></Space></Col>
+        <Col xs={24} md={13}><Space wrap><Button onClick={()=>updateWorkspaceQuery({project_id:'',order_id:'',production_id:'',production_status:'',from_date:'',to_date:'',sort_by:'start_date',sort_dir:'asc'})}>Xóa bộ lọc</Button><Button type="primary" icon={<ToolOutlined/>} disabled={!canCreatePlan} onClick={openStart}>Tạo Kế hoạch sản xuất</Button></Space></Col>
       </Row>
     </Card>
     <Card title={`Danh sách Lệnh sản xuất (${productionRows.length})`}><Table rowKey="id" loading={productionLoading} dataSource={productionRows} columns={productionColumns} scroll={{x:1400}}/></Card>
@@ -426,7 +430,7 @@ export default function OrderList() {
   return <div>
     <div className="page-header">
       <div><h1 style={{ marginBottom: 4 }}>Đơn hàng &amp; Sản xuất</h1><Text type="secondary">2.6.0-I — Order Workspace &amp; Production Order Control</Text></div>
-      <Space><Button icon={<PlusOutlined />} onClick={openNew}>Tạo đơn hàng</Button><Button type="primary" icon={<ToolOutlined />} onClick={openStart}>Lập Kế hoạch sản xuất</Button></Space>
+      <Space><Button icon={<PlusOutlined />} onClick={openNew}>Tạo đơn hàng</Button><Button type="primary" icon={<ToolOutlined />} disabled={!canCreatePlan} onClick={openStart}>Tạo Kế hoạch sản xuất</Button></Space>
     </div>
     <Tabs size="large" activeKey={workspaceTab} onChange={key=>updateWorkspaceQuery(key==='orders'?{tab:key,order_id:'',production_id:''}:{tab:key})} items={[
       {key:'orders',label:`Đơn hàng (${rows.length})`,children:orderWorkspace},
@@ -502,30 +506,27 @@ export default function OrderList() {
       </Form>
     </Modal>
 
-    <Modal title="Bắt đầu Kế hoạch sản xuất" open={startModal} onCancel={() => setStartModal(false)} footer={null} width={700} destroyOnClose>
-      <Alert showIcon type="info" message="Chọn Dự án và Đơn hàng" description="Mỗi Kế hoạch có thể chứa nhiều Nhóm sản xuất; mỗi Nhóm dùng một Quy trình khác nhau." style={{ marginBottom: 16 }} />
+    <Modal title="Tạo Kế hoạch sản xuất" open={startModal} onCancel={() => setStartModal(false)} footer={null} width={640} destroyOnClose>
       <Form form={startForm} layout="vertical" onFinish={continueStart}>
-        <Form.Item name="project_id" label="1. Dự án" rules={[{ required: true, message: 'Chọn Dự án' }]}><Select showSearch optionFilterProp="label" options={(meta.projects || []).map(project => ({ value: project.id, label: `${project.project_code} — ${project.project_name}` }))} onChange={() => startForm.setFieldValue('order_id', undefined)} /></Form.Item>
-        <Form.Item name="order_id" label="2. Đơn hàng" rules={[{ required: true, message: 'Chọn Đơn hàng' }]}><Select showSearch optionFilterProp="label" disabled={!startProjectId} placeholder={startProjectId ? 'Chọn đơn hàng cần sản xuất' : 'Chọn Dự án trước'} options={startOrders.map(order => ({ value: order.id, label: `${order.order_code} — ${orderStatus[order.status]?.[0]} · ${order.item_count} hạng mục` }))} /></Form.Item>
-        <Button type="primary" htmlType="submit">Tiếp tục lập Kế hoạch</Button>
+        <Form.Item name="project_id" label="Dự án" rules={[{ required: true, message: 'Chọn Dự án' }]}><Select showSearch optionFilterProp="label" options={(meta.projects || []).filter(project=>eligibleProjectIds.has(Number(project.id))).map(project => ({ value: project.id, label: `${project.project_code} — ${project.project_name}` }))} onChange={() => startForm.setFieldValue('order_id', undefined)} /></Form.Item>
+        <Form.Item name="order_id" label="Đơn hàng còn số lượng chưa sản xuất" rules={[{ required: true, message: 'Chọn Đơn hàng' }]}><Select showSearch optionFilterProp="label" disabled={!startProjectId} placeholder={startProjectId ? 'Chọn Đơn hàng' : 'Chọn Dự án trước'} options={startOrders.map(order => ({ value: order.id, label: `${order.order_code} — ${orderStatus[order.status]?.[0]} · ${order.item_count} hạng mục` }))} /></Form.Item>
+        <Button type="primary" htmlType="submit">Tiếp tục</Button>
       </Form>
     </Modal>
 
-    <Modal title={`Lập Kế hoạch sản xuất${context?.order?.order_code ? ` — ${context.order.order_code}` : ''}`} open={planModal} onCancel={() => setPlanModal(false)} footer={null} width={1280} destroyOnClose>
+    <Modal title={`Tạo Kế hoạch sản xuất${context?.order?.order_code ? ` — ${context.order.order_code}` : ''}`} open={planModal} onCancel={() => setPlanModal(false)} footer={null} width={1180} destroyOnClose>
       <Form form={planForm} layout="vertical" onFinish={createPlan}>
         <Form.Item name="order_id" hidden><Input /></Form.Item>
-        <Steps size="small" current={4} responsive items={['Dự án & Đơn hàng', 'Phạm vi thời gian', 'Nhóm & Quy trình', 'Công đoạn', 'Giám sát/Phụ trách', 'Xác nhận'].map(title => ({ title }))} style={{ marginBottom: 20 }} />
-        {context && <Alert showIcon type="info" message={`${context.order.project_name} · ${context.order.order_code}`} description={`${context.order.company_name || 'Không có khách hàng'} · Thông tin lấy từ Dự án/Đơn hàng và không sửa tại đây.`} style={{ marginBottom: 14 }} />}
+        {context && <Descriptions bordered size="small" column={3} style={{marginBottom:8}}><Descriptions.Item label="Dự án">{context.order.project_name}</Descriptions.Item><Descriptions.Item label="Đơn hàng">{context.order.order_code}</Descriptions.Item><Descriptions.Item label="Khách hàng">{context.order.company_name||'-'}</Descriptions.Item></Descriptions>}
         <Divider orientation="left">1. Phạm vi thời gian</Divider>
-        <Row gutter={12}>
+        <Row gutter={12} align="middle">
           <Col span={10}><Form.Item name="time_mode" label="Cách lập lịch" rules={[{ required: true }]}><Select options={timeModes} /></Form.Item></Col>
-          {planTimeMode === 'PROJECT' && <Col span={14}><Alert type="success" showIcon message={`Theo Dự án: ${formatDate(context?.order?.project_start_date)} – ${formatDate(context?.order?.project_end_date)}`} /></Col>}
+          {planTimeMode === 'PROJECT' && <Col span={14}><Text strong>Theo Dự án: {formatDate(context?.order?.project_start_date)} – {formatDate(context?.order?.project_end_date)}</Text></Col>}
           {planTimeMode === 'PHASE' && <><Col span={7}><Form.Item name="planned_start_date" label="Từ ngày" rules={[{ required: true }]}><DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} /></Form.Item></Col><Col span={7}><Form.Item name="planned_end_date" label="Đến ngày" rules={[{ required: true }]}><DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} /></Form.Item></Col></>}
-          {planTimeMode === 'CUSTOM' && <Col span={14}><Alert type="warning" showIcon message="Ngày bắt đầu/kết thúc sẽ chọn riêng tại từng công đoạn." /></Col>}
+          {planTimeMode === 'CUSTOM' && <Col span={14}><Text type="secondary">Chọn ngày riêng cho từng Công đoạn.</Text></Col>}
         </Row>
 
         <Divider orientation="left">2. Nhóm sản xuất — hạng mục trước, Quy trình sau</Divider>
-        <Alert type="info" showIcon message="Một Kế hoạch có nhiều Nhóm sản xuất" description="Mỗi Nhóm chọn một hoặc nhiều hạng mục và một Quy trình. Có thể chia cùng hạng mục qua nhiều Nhóm, nhưng tổng số lượng không được vượt phần còn lại của Đơn hàng." style={{ marginBottom: 12 }} />
         <Form.List name="groups">{(groupFields, { add, remove: removeGroup }) => <Space direction="vertical" style={{ width: '100%' }} size="middle">
           {groupFields.map((groupField, groupIndex) => {
             const process = groupProcesses[groupIndex];
@@ -540,24 +541,18 @@ export default function OrderList() {
                 { title: 'Hạng mục', render: (_, itemField) => { const id = planForm.getFieldValue(['groups', groupIndex, 'items', itemField.name, 'order_item_id']); const item = context?.order?.items?.find(value => Number(value.id) === Number(id)); return <><Form.Item {...itemField} name={[itemField.name, 'order_item_id']} hidden><Input /></Form.Item><Text strong>{item?.item_name}</Text><br /><Text type="secondary">Còn {Number(item?.remaining_quantity || 0)} {item?.unit}</Text></>; } },
                 { title: 'Số lượng Nhóm này', width: 230, render: (_, itemField) => <Form.Item {...itemField} name={[itemField.name, 'planned_quantity']} style={{ margin: 0 }}><InputNumber min={0.001} style={{ width: '100%' }} /></Form.Item> },
               ]} />}</Form.List>
-              {process && <Alert style={{ marginTop: 12 }} showIcon type="success" message={`${process.name}: ${process.stages?.length || 0} công đoạn sẽ được tạo`} description={<Space wrap>{(process.stages || []).map((stage, index) => <Tag color="blue" key={stage.id}>{index + 1}. {stage.name}</Tag>)}</Space>} />}
-              <Form.List name={[groupField.name, 'stages']}>{stageFields => <Space direction="vertical" style={{ width: '100%', marginTop: 12 }}>
-                {stageFields.map((stageField, stageIndex) => { const stage = process?.stages?.[stageIndex]; return <Card key={stageField.key} size="small" type="inner" title={`${stageIndex + 1}. ${stage?.name || 'Công đoạn'}`} extra={<Tag>{stage?.work_group_name || 'Sản xuất'}</Tag>}>
-                  <Form.Item {...stageField} name={[stageField.name, 'source_stage_id']} hidden><Input /></Form.Item>
-                  {planTimeMode === 'CUSTOM' && <Row gutter={12}><Col span={8}><Form.Item {...stageField} name={[stageField.name, 'start_date']} label="Từ ngày" rules={[{ required: true }]}><DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} /></Form.Item></Col><Col span={8}><Form.Item {...stageField} name={[stageField.name, 'end_date']} label="Đến ngày" rules={[{ required: true }]}><DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} /></Form.Item></Col></Row>}
-                  <Alert type="info" showIcon message="Công đoạn chỉ là khung của Quy trình" description="Sau khi lưu Kế hoạch, hãy sang Nhiệm vụ để thêm một hoặc nhiều Công việc và phân công nhân sự cho Công đoạn này." />
-                </Card>; })}
-              </Space>}</Form.List>
+              {process && <div style={{marginTop:10}}><Text strong>{process.name} · {process.stages?.length||0} Công đoạn: </Text><Space wrap size={[4,4]}>{(process.stages||[]).map((stage,index)=><Tag color="blue" key={stage.id}>{index+1}. {stage.name}</Tag>)}</Space></div>}
+              <Form.List name={[groupField.name, 'stages']}>{stageFields => planTimeMode==='CUSTOM'?<Space direction="vertical" style={{width:'100%',marginTop:10}}>{stageFields.map((stageField,stageIndex)=>{const stage=process?.stages?.[stageIndex];return <Card key={stageField.key} size="small"><Form.Item {...stageField} name={[stageField.name,'source_stage_id']} hidden><Input/></Form.Item><Row gutter={12} align="middle"><Col span={8}><Text strong>{stageIndex+1}. {stage?.name||'Công đoạn'}</Text></Col><Col span={8}><Form.Item {...stageField} name={[stageField.name,'start_date']} label="Từ ngày" rules={[{required:true}]} style={{marginBottom:0}}><DatePicker format="DD/MM/YYYY" style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item {...stageField} name={[stageField.name,'end_date']} label="Đến ngày" rules={[{required:true}]} style={{marginBottom:0}}><DatePicker format="DD/MM/YYYY" style={{width:'100%'}}/></Form.Item></Col></Row></Card>;})}</Space>:<>{stageFields.map(stageField=><Form.Item key={stageField.key} {...stageField} name={[stageField.name,'source_stage_id']} hidden><Input/></Form.Item>)}</>}</Form.List>
             </Card>;
           })}
           <Button block type="dashed" icon={<PlusOutlined />} onClick={() => add(blankGroup(context?.order?.items))}>Thêm Nhóm sản xuất / Quy trình khác</Button>
         </Space>}</Form.List>
 
         <Divider orientation="left">3. Giám sát / nhân sự tham gia toàn Kế hoạch</Divider>
-        <Alert type="warning" showIcon message="Lưu một lần ở cấp Kế hoạch, không nhân đôi giờ công ở mọi công đoạn" description="Có thể chọn toàn thời gian Dự án, theo giai đoạn Kế hoạch hoặc đánh dấu các ngày cụ thể." style={{ marginBottom: 10 }} />
+        <Text type="secondary">Phân công này áp dụng một lần cho toàn Kế hoạch.</Text>
         <Form.List name="global_assignments">{(fields, { add, remove: removeAssignment }) => <>{fields.map(field => <Card key={field.key} size="small"><AssignmentFields field={field} global /><Button danger type="link" onClick={() => removeAssignment(field.name)}>Xóa</Button></Card>)}<Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ role: supervisorRole, time_mode: 'PROJECT' })}>Thêm Giám sát / nhân sự toàn Kế hoạch</Button></>}</Form.List>
         <Form.Item name="notes" label="Ghi chú" style={{ marginTop: 12 }}><Input.TextArea rows={2} /></Form.Item>
-        <Button type="primary" htmlType="submit" loading={savingPlan}>Xác nhận tạo Kế hoạch và các Công đoạn</Button>
+        <Button type="primary" htmlType="submit" loading={savingPlan}>Tạo Kế hoạch sản xuất</Button>
       </Form>
     </Modal>
 

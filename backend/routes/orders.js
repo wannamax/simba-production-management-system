@@ -147,7 +147,16 @@ router.get('/', async (req, res, next) => {
       `SELECT o.*,p.project_code,p.project_name,p.project_type,c.company_name,
         (SELECT COUNT(*)::int FROM project_order_items i WHERE i.order_id=o.id) item_count,
         COALESCE((SELECT SUM(i.quantity*i.unit_price) FROM project_order_items i WHERE i.order_id=o.id),0) total_amount,
-        (SELECT COUNT(*)::int FROM production_orders po WHERE po.order_id=o.id AND po.status<>'CANCELLED') production_order_count
+        (SELECT COUNT(*)::int FROM production_orders po WHERE po.order_id=o.id AND po.status<>'CANCELLED') production_order_count,
+        EXISTS(
+          SELECT 1 FROM project_order_items source
+          WHERE source.order_id=o.id AND source.quantity>COALESCE((
+            SELECT SUM(production_item.planned_quantity)
+            FROM production_order_items production_item
+            JOIN production_orders production ON production.id=production_item.production_order_id
+            WHERE production_item.order_item_id=source.id AND production.status<>'CANCELLED'
+          ),0)
+        ) has_remaining_quantity
        FROM project_orders o JOIN projects p ON p.id=o.project_id LEFT JOIN customers c ON c.id=p.customer_id
        ${where} ORDER BY o.created_at DESC`, params
     );

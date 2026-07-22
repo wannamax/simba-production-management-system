@@ -77,6 +77,9 @@ async function request(path, options = {}) {
     });
     assert.equal(plan.status, 201, JSON.stringify(plan.body));
     const stage = plan.body.data.groups[0].stages[0];
+    const fullyPlannedOrders = await request(`/orders?project_id=${projectId}`);
+    assert.equal(fullyPlannedOrders.status, 200, JSON.stringify(fullyPlannedOrders.body));
+    assert.equal(fullyPlannedOrders.body.data.find(row => Number(row.id) === Number(orderId)).has_remaining_quantity, false);
 
     const work = await request('/tasks', {
       method: 'POST',
