@@ -1,22 +1,22 @@
-name: Release Simba PMS 2.4.0-D
+name: Release Simba PMS 2.6.0-I
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - "v2.4.0-D"
+      - "v2.6.0-I"
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: release-simba-pms-2.4.0-D
+  group: release-simba-pms-2.6.0-I
   cancel-in-progress: false
 
 env:
   COMPOSE_FILE: compose.ci.yml
-  RELEASE_VERSION: "2.4.0-D"
+  RELEASE_VERSION: "2.6.0-I"
 
 jobs:
   test-amd64:
@@ -119,6 +119,18 @@ jobs:
           docker compose -f "$COMPOSE_FILE" exec -T \
             -e TEST_BASE_URL=http://web \
             backend node tests/project-material-integration-smoke.js
+
+      - name: Test Project Closeout 2.5.0
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/project-closeout-smoke.js
+
+      - name: Test Daily Shopfloor Work Board 2.6.0-A
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/shopfloor-work-board-smoke.js
 
       - name: Test database backup and restore
         run: |
@@ -231,7 +243,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:${{ env.RELEASE_VERSION }}
-            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.4
+            ghcr.io/${{ github.repository_owner }}/simba-pms-${{ matrix.name }}:2.6
           labels: |
             org.opencontainers.image.title=Simba PMS ${{ matrix.name }}
             org.opencontainers.image.version=${{ env.RELEASE_VERSION }}

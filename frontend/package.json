@@ -1,6 +1,6 @@
 {
   "name": "simba-pms-frontend",
-  "version": "2.4.0-D",
+  "version": "2.6.0-I",
   "private": true,
   "description": "Simba Production Management System web interface",
   "type": "module",

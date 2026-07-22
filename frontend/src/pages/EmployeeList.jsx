@@ -43,8 +43,11 @@ const EmployeeList = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [form] = Form.useForm();
+  const selectedProvince = Form.useWatch('province_code', form);
   const [departments, setDepartments] = useState([]);
   const [positions, setPositions] = useState([]);
+  const [provinces, setProvinces] = useState([]);
+  const [communes, setCommunes] = useState([]);
   const [filters, setFilters] = useState({
     department: '',
     status: 'Hoạt động',
@@ -56,9 +59,18 @@ const EmployeeList = () => {
     Promise.all([
       settingsAPI.getCatalogs({ type: 'DEPARTMENT' }),
       settingsAPI.getCatalogs({ type: 'EMPLOYEE_POSITION' }),
-    ]).then(([d,p]) => { setDepartments(d.data || []); setPositions(p.data || []); })
+      settingsAPI.getProvinces(),
+    ]).then(([d,p,a]) => { setDepartments(d.data || []); setPositions(p.data || []); setProvinces(a.data || []); })
       .catch(e => message.warning(e.message || 'Không thể tải danh mục nhân sự'));
   }, []);
+
+  const loadCommunes = async (provinceCode) => {
+    if (!provinceCode) { setCommunes([]); return; }
+    try {
+      const response = await settingsAPI.getCommunes(provinceCode);
+      setCommunes(response.data || []);
+    } catch (error) { message.warning(error.message || 'Không thể tải danh mục Phường/Xã'); }
+  };
 
   const loadEmployees = async () => {
     setLoading(true);
@@ -75,6 +87,7 @@ const EmployeeList = () => {
   const handleCreate = () => {
     setEditingEmployee(null);
     form.resetFields();
+    setCommunes([]);
     setModalVisible(true);
   };
 
@@ -84,6 +97,7 @@ const EmployeeList = () => {
       ...record,
       hire_date: record.hire_date ? dayjs(record.hire_date) : null,
     });
+    loadCommunes(record.province_code);
     setModalVisible(true);
   };
 
@@ -93,7 +107,7 @@ const EmployeeList = () => {
       message.success('Xóa nhân viên thành công');
       loadEmployees();
     } catch (error) {
-      message.error('Không thể xóa nhân viên');
+      message.error(error.message || 'Không thể xóa nhân viên');
     }
   };
 
@@ -116,9 +130,7 @@ const EmployeeList = () => {
       form.resetFields();
       loadEmployees();
     } catch (error) {
-      message.error(
-        editingEmployee ? 'Không thể cập nhật nhân viên' : 'Không thể tạo nhân viên'
-      );
+      message.error(error.message || (editingEmployee ? 'Không thể cập nhật nhân viên' : 'Không thể tạo nhân viên'));
     }
   };
 
@@ -487,8 +499,21 @@ const EmployeeList = () => {
           </Row>
 
           <Form.Item name="address" label="Địa chỉ">
-            <Input.TextArea rows={2} placeholder="Địa chỉ thường trú" />
+            <Input.TextArea rows={2} placeholder="Số nhà, tên đường" />
           </Form.Item>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="province_code" label="Tỉnh/Thành phố">
+                <Select showSearch allowClear optionFilterProp="label" placeholder="Chọn Tỉnh/Thành" options={provinces.map(item => ({ value: item.code, label: `${item.unit_type} ${item.name}` }))} onChange={value => { form.setFieldValue('commune_code', null); loadCommunes(value); }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="commune_code" label="Phường/Xã/Đặc khu">
+                <Select showSearch allowClear optionFilterProp="label" disabled={!selectedProvince} placeholder="Chọn Phường/Xã" options={communes.map(item => ({ value: item.code, label: `${item.unit_type} ${item.name}` }))} />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Form.Item name="notes" label="Ghi chú">
             <Input.TextArea rows={2} placeholder="Ghi chú thêm" />

@@ -28,7 +28,9 @@ import {
   BarChartOutlined,
   EnvironmentOutlined,
   ClockCircleOutlined,
-  SwapOutlined
+  SwapOutlined,
+  DesktopOutlined,
+  ShoppingCartOutlined
 } from '@ant-design/icons';
 import { notificationAPI } from '../services/api';
 
@@ -79,6 +81,11 @@ const menuItems = [
     key: '/projects',
     icon: <ProjectOutlined />,
     label: 'Dự án',
+  },
+  {
+    key: '/orders',
+    icon: <ShoppingCartOutlined />,
+    label: 'Đơn hàng',
   },
   {
     key: '/tasks',
@@ -145,6 +152,11 @@ const menuItems = [
         label: 'Báo cáo tháng',
       },
     ],
+  },
+  {
+    key: '/work-board',
+    icon: <DesktopOutlined />,
+    label: 'Bảng điều hành xưởng',
   },
   {
     key: '/data-transfer',
@@ -481,7 +493,7 @@ const getOpenKeys = () => {
           }}
         >
           <Text type="secondary" style={{ fontSize: 12 }}>
-            Simba PMS - Version: 2.4.0-D
+            Simba PMS - Version: 2.6.0-I
           </Text>
         </div>
       </Layout>

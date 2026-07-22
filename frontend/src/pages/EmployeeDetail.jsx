@@ -92,7 +92,7 @@ const EmployeeDetail = () => {
             {employee.id_number}
           </Descriptions.Item>
           <Descriptions.Item label="Địa chỉ" span={2}>
-            {employee.address}
+            {[employee.address, employee.commune_name && `${employee.commune_type} ${employee.commune_name}`, employee.province_name && `${employee.province_type} ${employee.province_name}`].filter(Boolean).join(', ') || '-'}
           </Descriptions.Item>
         </Descriptions>
       </Card>

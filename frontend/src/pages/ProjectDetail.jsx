@@ -17,7 +17,11 @@ import {
   Input,
   Select,
   DatePicker,
-  InputNumber
+  InputNumber,
+  Popconfirm,
+  Row,
+  Col,
+  Alert
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -27,11 +31,18 @@ import {
   FileTextOutlined,
   InboxOutlined,
   PlusOutlined,
-  ToolOutlined
+  ToolOutlined,
+  AuditOutlined,
+  DeleteOutlined,
+  CheckCircleOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import axios from 'axios';
 import ProjectMaterialsPanel from '../components/ProjectMaterialsPanel';
+import ProjectCloseoutPanel from '../components/ProjectCloseoutPanel';
+import ProjectDailyLogsPanel from '../components/ProjectDailyLogsPanel';
+import ProjectExecutionPanel from '../components/ProjectExecutionPanel';
+import { workCatalogAPI } from '../services/api';
 
 const { TabPane } = Tabs;
 const { Option } = Select;
@@ -65,11 +76,19 @@ const ProjectDetail = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [modalType, setModalType] = useState(''); // 'employee', 'product', 'task'
   const [form] = Form.useForm();
+  const [basicForm] = Form.useForm();
   const [employees, setEmployees] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [editingAssignment, setEditingAssignment] = useState(null);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [basicModalVisible, setBasicModalVisible] = useState(false);
+  const [customers, setCustomers] = useState([]);
+  const [projectTypes, setProjectTypes] = useState([]);
 
   useEffect(() => {
     loadProject();
     loadEmployees();
+    workCatalogAPI.getRoles().then(response=>setRoles(response.data||[])).catch(()=>{});
   }, [id]);
 
   const loadProject = async () => {
@@ -94,28 +113,85 @@ const ProjectDetail = () => {
   };
 
   const handleAddEmployee = () => {
+    setEditingAssignment(null);
     setModalType('employee');
     form.resetFields();
     setModalVisible(true);
   };
 
   const handleAddProduct = () => {
+    setEditingProduct(null);
     setModalType('product');
     form.resetFields();
     setModalVisible(true);
   };
 
+  const handleEditEmployee = record => {
+    setEditingAssignment(record);
+    setModalType('employee');
+    form.setFieldsValue({employee_id:record.employee_id,role:record.role,notes:record.notes});
+    setModalVisible(true);
+  };
+
+  const handleRemoveEmployee = async record => {
+    try{
+      await axios.delete(`${API_URL}/projects/${id}/assignments/${record.id}`);
+      message.success('Đã loại nhân viên khỏi dự án');
+      loadProject();
+    }catch(error){message.error(error.response?.data?.message||'Không thể loại nhân viên');}
+  };
+
+  const handleEditProduct = record => {
+    setEditingProduct(record);
+    setModalType('product');
+    form.setFieldsValue(record);
+    setModalVisible(true);
+  };
+
+  const handleRemoveProduct = async record => {
+    try{
+      await axios.delete(`${API_URL}/projects/${id}/products/${record.id}`);
+      message.success('Đã xóa sản phẩm');
+      loadProject();
+    }catch(error){message.error(error.response?.data?.message||'Không thể xóa sản phẩm');}
+  };
+
+  const openBasicEdit = async () => {
+    try{
+      const [customerResponse,typeResponse]=await Promise.all([
+        axios.get(`${API_URL}/customers`,{params:{limit:1000}}),
+        workCatalogAPI.getProjectTypes(),
+      ]);
+      setCustomers(customerResponse.data.data||[]);
+      setProjectTypes(typeResponse.data||[]);
+      basicForm.setFieldsValue({...project,start_date:project.start_date?dayjs(project.start_date):null,end_date:project.end_date?dayjs(project.end_date):null});
+      setBasicModalVisible(true);
+    }catch(error){message.error('Không thể mở thông tin chỉnh sửa');}
+  };
+
+  const saveBasicProject = async values => {
+    try{
+      await axios.put(`${API_URL}/projects/${id}`,{...values,start_date:values.start_date?.format('YYYY-MM-DD')||null,end_date:values.end_date?.format('YYYY-MM-DD')||null});
+      message.success('Đã cập nhật thông tin cơ bản');
+      setBasicModalVisible(false);
+      loadProject();
+    }catch(error){message.error(error.response?.data?.message||'Không thể cập nhật dự án');}
+  };
+
   const handleModalSubmit = async (values) => {
     try {
       if (modalType === 'employee') {
-        await axios.post(`${API_URL}/projects/${id}/assignments`, values);
-        message.success('Phân công nhân viên thành công');
+        if(editingAssignment) await axios.put(`${API_URL}/projects/${id}/assignments/${editingAssignment.id}`,values);
+        else await axios.post(`${API_URL}/projects/${id}/assignments`, values);
+        message.success(editingAssignment?'Đã cập nhật vai trò':'Phân công nhân viên thành công');
       } else if (modalType === 'product') {
-        await axios.post(`${API_URL}/projects/${id}/products`, {
+        const payload={
           ...values,
           total_price: values.quantity * values.unit_price
-        });
-        message.success('Thêm sản phẩm thành công');
+        };
+        if(editingProduct) await axios.put(`${API_URL}/projects/${id}/products/${editingProduct.id}`,payload);
+        else await axios.post(`${API_URL}/projects/${id}/products`,payload);
+        message.success(editingProduct?'Đã cập nhật sản phẩm':'Thêm sản phẩm thành công');
       }
       setModalVisible(false);
       form.resetFields();
@@ -207,6 +283,15 @@ const ProjectDetail = () => {
       title: 'SĐT',
       dataIndex: 'phone',
       key: 'phone'
+    },
+    {
+      title: 'Thao tác',
+      key: 'actions',
+      width: 120,
+      render: (_,record) => <Space>
+        <Button size="small" icon={<EditOutlined/>} onClick={()=>handleEditEmployee(record)}/>
+        <Popconfirm title="Loại nhân viên khỏi dự án?" description="Hệ thống sẽ chặn nếu nhân viên còn Task hoặc lịch đang hoạt động." onConfirm={()=>handleRemoveEmployee(record)}><Button size="small" danger icon={<DeleteOutlined/>}/></Popconfirm>
+      </Space>
     }
   ];
 
@@ -258,6 +343,15 @@ const ProjectDetail = () => {
       key: 'production_status',
       width: 130,
       render: (status) => <Tag>{status}</Tag>
+    },
+    {
+      title: 'Thao tác',
+      key: 'actions',
+      width: 120,
+      render: (_,record) => <Space>
+        <Button size="small" icon={<EditOutlined/>} onClick={()=>handleEditProduct(record)}/>
+        <Popconfirm title="Xóa sản phẩm này?" onConfirm={()=>handleRemoveProduct(record)}><Button size="small" danger icon={<DeleteOutlined/>}/></Popconfirm>
+      </Space>
     }
   ];
 
@@ -273,8 +367,8 @@ const ProjectDetail = () => {
           </Button>
           <h1>{project.project_name}</h1>
         </Space>
-        <Button type="primary" icon={<EditOutlined />}>
-          Chỉnh sửa
+        <Button type="primary" icon={<EditOutlined />} onClick={openBasicEdit}>
+          Sửa thông tin cơ bản
         </Button>
       </div>
 
@@ -330,6 +424,41 @@ const ProjectDetail = () => {
       </Card>
 
       <Tabs defaultActiveKey="schedules">
+        <TabPane
+          tab={
+            <span>
+              <CheckCircleOutlined />
+              Công việc
+            </span>
+          }
+          key="execution"
+        >
+          <ProjectExecutionPanel projectId={Number(id)} onOpenTasks={() => navigate(`/tasks?project_id=${id}`)} />
+        </TabPane>
+        <TabPane
+          tab={
+            <span>
+              <FileTextOutlined />
+              Nhật ký Dự án
+            </span>
+          }
+          key="daily-logs"
+        >
+          <ProjectDailyLogsPanel projectId={Number(id)} />
+        </TabPane>
+
+        <TabPane
+          tab={
+            <span>
+              <AuditOutlined />
+              Đóng dự án
+            </span>
+          }
+          key="closeout"
+        >
+          <ProjectCloseoutPanel projectId={Number(id)} onClosed={loadProject} />
+        </TabPane>
+
         <TabPane
           tab={
             <span>
@@ -453,7 +582,7 @@ const ProjectDetail = () => {
 
       {/* Modal for adding employee or product */}
       <Modal
-        title={modalType === 'employee' ? 'Phân công nhân viên' : 'Thêm sản phẩm'}
+        title={modalType === 'employee' ? (editingAssignment?'Cập nhật vai trò nhân viên':'Phân công nhân viên') : (editingProduct?'Cập nhật sản phẩm':'Thêm sản phẩm')}
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         footer={null}
@@ -470,6 +599,7 @@ const ProjectDetail = () => {
                   placeholder="Chọn nhân viên"
                   showSearch
                   optionFilterProp="children"
+                  disabled={Boolean(editingAssignment)}
                 >
                   {employees.map((emp) => (
                     <Option key={emp.id} value={emp.id}>
@@ -483,14 +613,7 @@ const ProjectDetail = () => {
                 label="Vai trò trong dự án"
                 rules={[{ required: true, message: 'Vui lòng nhập vai trò' }]}
               >
-                <Select placeholder="Chọn vai trò">
-                  <Option value="Quản lý dự án">Quản lý dự án</Option>
-                  <Option value="Trưởng nhóm sản xuất">Trưởng nhóm sản xuất</Option>
-                  <Option value="Trưởng nhóm lắp đặt">Trưởng nhóm lắp đặt</Option>
-                  <Option value="Thiết kế">Thiết kế</Option>
-                  <Option value="Thợ sản xuất">Thợ sản xuất</Option>
-                  <Option value="Thợ lắp đặt">Thợ lắp đặt</Option>
-                </Select>
+                <Select placeholder="Chọn vai trò" options={roles.map(role=>({value:role.name,label:role.name}))}/>
               </Form.Item>
               <Form.Item name="notes" label="Ghi chú">
                 <Input.TextArea rows={3} />
@@ -543,16 +666,31 @@ const ProjectDetail = () => {
                   addonAfter="VNĐ"
                 />
               </Form.Item>
+              <Form.Item name="production_status" label="Trạng thái sản xuất" initialValue="Chưa sản xuất">
+                <Select options={['Chưa sản xuất','Đang sản xuất','Hoàn thành','Tạm dừng'].map(value=>({value,label:value}))}/>
+              </Form.Item>
             </>
           )}
           <Form.Item>
             <Space>
               <Button type="primary" htmlType="submit">
-                {modalType === 'employee' ? 'Phân công' : 'Thêm'}
+                {modalType === 'employee' ? (editingAssignment?'Cập nhật':'Phân công') : (editingProduct?'Cập nhật':'Thêm')}
               </Button>
               <Button onClick={() => setModalVisible(false)}>Hủy</Button>
             </Space>
           </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal title="Sửa thông tin cơ bản Dự án" open={basicModalVisible} onCancel={()=>setBasicModalVisible(false)} footer={null} width={760} destroyOnClose>
+        <Alert showIcon type="info" message="Nhân sự, Vật tư, Sản phẩm và Lịch trình được quản lý trực tiếp trong các tab bên dưới." style={{marginBottom:16}}/>
+        <Form form={basicForm} layout="vertical" onFinish={saveBasicProject}>
+          <Row gutter={16}><Col span={12}><Form.Item name="project_name" label="Tên dự án" rules={[{required:true}]}><Input/></Form.Item></Col><Col span={12}><Form.Item name="project_type" label="Loại dự án" rules={[{required:true}]}><Select options={projectTypes.map(type=>({value:type.name,label:type.name}))}/></Form.Item></Col></Row>
+          <Form.Item name="customer_id" label="Khách hàng" rules={[{required:true}]}><Select showSearch optionFilterProp="label" options={customers.map(customer=>({value:customer.id,label:customer.company_name}))}/></Form.Item>
+          <Row gutter={16}><Col span={8}><Form.Item name="start_date" label="Ngày bắt đầu"><DatePicker format="DD/MM/YYYY" style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="end_date" label="Ngày kết thúc"><DatePicker format="DD/MM/YYYY" style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item name="priority" label="Ưu tiên"><Select options={['Thấp','Trung bình','Cao','Khẩn cấp'].map(value=>({value,label:value}))}/></Form.Item></Col></Row>
+          <Row gutter={16}><Col span={12}><Form.Item name="status" label="Trạng thái"><Select options={['Mới tạo','Đang thiết kế','Đang sản xuất','Đang lắp đặt','Hoàn thành','Hủy'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={12}><Form.Item name="budget" label="Ngân sách"><InputNumber min={0} style={{width:'100%'}}/></Form.Item></Col></Row>
+          <Form.Item name="description" label="Mô tả"><Input.TextArea rows={3}/></Form.Item>
+          <Space><Button type="primary" htmlType="submit">Lưu thông tin</Button><Button onClick={()=>setBasicModalVisible(false)}>Hủy</Button></Space>
         </Form>
       </Modal>
     </div>

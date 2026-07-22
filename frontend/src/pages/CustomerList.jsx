@@ -12,7 +12,8 @@ import {
   Row,
   Col,
   Statistic,
-  Tag
+  Tag,
+  Select
 } from 'antd';
 import {
   PlusOutlined,
@@ -24,7 +25,7 @@ import {
   MailOutlined
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { customerAPI } from '../services/api';
+import { customerAPI, settingsAPI } from '../services/api';
 
 const { Search } = Input;
 
@@ -34,7 +35,10 @@ const CustomerList = () => {
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
+  const [provinces, setProvinces] = useState([]);
+  const [communes, setCommunes] = useState([]);
   const [form] = Form.useForm();
+  const selectedProvince = Form.useWatch('province_code', form);
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 20,
@@ -68,15 +72,30 @@ const CustomerList = () => {
     loadCustomers();
   }, [loadCustomers]);
 
+  useEffect(() => {
+    settingsAPI.getProvinces().then(response => setProvinces(response.data || []))
+      .catch(error => message.warning(error.message || 'Không thể tải danh mục Tỉnh/Thành'));
+  }, []);
+
+  const loadCommunes = async (provinceCode) => {
+    if (!provinceCode) { setCommunes([]); return; }
+    try {
+      const response = await settingsAPI.getCommunes(provinceCode);
+      setCommunes(response.data || []);
+    } catch (error) { message.warning(error.message || 'Không thể tải danh mục Phường/Xã'); }
+  };
+
   const handleCreate = () => {
     setEditingCustomer(null);
     form.resetFields();
+    setCommunes([]);
     setModalVisible(true);
   };
 
   const handleEdit = (record) => {
     setEditingCustomer(record);
     form.setFieldsValue(record);
+    loadCommunes(record.province_code);
     setModalVisible(true);
   };
 
@@ -172,10 +191,10 @@ const CustomerList = () => {
     },
     {
       title: 'Địa chỉ',
-      dataIndex: 'address',
       key: 'address',
       width: 250,
       ellipsis: true,
+      render: (_, record) => [record.address, record.commune_name && `${record.commune_type} ${record.commune_name}`, record.province_name && `${record.province_type} ${record.province_name}`].filter(Boolean).join(', ') || '-',
     },
     {
       title: 'Mã số thuế',
@@ -397,13 +416,13 @@ const CustomerList = () => {
 
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="city" label="Thành phố">
-                <Input placeholder="Nhập thành phố" />
+              <Form.Item name="province_code" label="Tỉnh/Thành phố">
+                <Select showSearch allowClear optionFilterProp="label" placeholder="Chọn Tỉnh/Thành" options={provinces.map(item => ({ value: item.code, label: `${item.unit_type} ${item.name}` }))} onChange={value => { form.setFieldValue('commune_code', null); loadCommunes(value); }} />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="district" label="Quận/Huyện">
-                <Input placeholder="Nhập quận/huyện" />
+              <Form.Item name="commune_code" label="Phường/Xã/Đặc khu">
+                <Select showSearch allowClear optionFilterProp="label" disabled={!selectedProvince} placeholder="Chọn Phường/Xã" options={communes.map(item => ({ value: item.code, label: `${item.unit_type} ${item.name}` }))} />
               </Form.Item>
             </Col>
           </Row>

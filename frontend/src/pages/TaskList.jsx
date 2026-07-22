@@ -1,614 +1,267 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Table,
-  Button,
-  Space,
-  Tag,
-  Input,
-  Select,
-  Modal,
-  Form,
-  DatePicker,
-  InputNumber,
-  message,
-  Card,
-  Row,
-  Col,
-  Statistic,
-  Tooltip,
-  Badge,
-  Progress
+  Alert, Badge, Button, Card, Col, Collapse, DatePicker, Descriptions, Divider, Empty, Form,
+  Input, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table,
+  Tag, Tooltip, Typography, message,
 } from 'antd';
 import {
-  PlusOutlined,
-  EyeOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  CheckCircleOutlined,
-  ClockCircleOutlined,
-  WarningOutlined,
-  InboxOutlined
+  CheckCircleOutlined, DeleteOutlined, EditOutlined, EyeOutlined, InboxOutlined,
+  PlusOutlined, ProjectOutlined, TeamOutlined, WarningOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
-import axios from 'axios';
-import { settingsAPI } from '../services/api';
+import { projectAPI, taskAPI, workCatalogAPI } from '../services/api';
+import AssignmentWorkCalendar from '../components/AssignmentWorkCalendar';
 
-const { Search } = Input;
-const { Option } = Select;
+const { Text } = Typography;
+const productionStatusLabel={PLANNED:'Kế hoạch',IN_PROGRESS:'Đang sản xuất',READY_FOR_DELIVERY:'Sẵn sàng giao',COMPLETED:'Hoàn tất',CANCELLED:'Đã hủy'};
 
-const API_URL = import.meta.env.VITE_API_URL || '/api';
-
-const TaskList = () => {
-  const navigate = useNavigate();
-  const [tasks, setTasks] = useState([]);
-  const [projects, setProjects] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [editingTask, setEditingTask] = useState(null);
-  const [form] = Form.useForm();
-  const [taskTypes, setTaskTypes] = useState([]);
-  const [filters, setFilters] = useState({
-    project_id: '',
-    task_type: '',
-    status: '',
-    is_overdue: false,
-    is_archived: false
-  });
-
-  useEffect(() => {
-    settingsAPI.getCatalogs({ type: 'TASK_TYPE' }).then(r => setTaskTypes(r.data || [])).catch(e => message.warning(e.message));
-    loadProjects();
-  }, []);
-
-  useEffect(() => {
-    loadTasks();
-  }, [filters]);
-
-  const loadTasks = async () => {
+export default function TaskList() {
+  const navigate=useNavigate();
+  const [searchParams]=useSearchParams();
+  const [form]=Form.useForm();
+  const [tasks,setTasks]=useState([]);
+  const [productionStages,setProductionStages]=useState([]);
+  const [projects,setProjects]=useState([]);
+  const [context,setContext]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [contextLoading,setContextLoading]=useState(false);
+  const [modalVisible,setModalVisible]=useState(false);
+  const [editingTask,setEditingTask]=useState(null);
+  const [activeKeys,setActiveKeys]=useState([]);
+  const linkedProjectId=Number(searchParams.get('project_id'))||'';
+  const linkedStageId=Number(searchParams.get('stage_id'))||undefined;
+  const [filters,setFilters]=useState({project_id:linkedProjectId,status:'',is_overdue:false,is_archived:false});
+  const [deepLinkHandled,setDeepLinkHandled]=useState(false);
+  const [search,setSearch]=useState('');
+  const [viewMode,setViewMode]=useState('project');
+  const loadProjects=async()=>{
+    try{
+      const response=await projectAPI.getAll({page:1,limit:1000});
+      const rows=response.data||[]; setProjects(rows);
+      setActiveKeys(previous=>previous.length?previous:rows.slice(0,3).map(row=>String(row.id)));
+    }catch(error){message.error(`Không thể tải dự án: ${error.message}`);}
+  };
+  const loadTasks=async()=>{
     setLoading(true);
-    try {
-      const response = await axios.get(`${API_URL}/tasks`, { params: filters });
-      setTasks(response.data.data);
-    } catch (error) {
-      message.error('Không thể tải danh sách nhiệm vụ');
-    } finally {
-      setLoading(false);
-    }
+    try{const response=await taskAPI.getAll(filters);setTasks(response.data||[]);setProductionStages(response.production_stages||[]);}
+    catch(error){message.error(`Không thể tải nhiệm vụ: ${error.message}`);}finally{setLoading(false);}
   };
+  useEffect(()=>{loadProjects();},[]);
+  useEffect(()=>{loadTasks();},[filters]);
 
-  const loadProjects = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/projects`);
-      setProjects(response.data.data);
-    } catch (error) {
-      console.error('Error loading projects:', error);
-    }
+  const loadContext=async projectId=>{
+    if(!projectId){setContext(null);return null;}
+    setContextLoading(true);
+    try{const response=await workCatalogAPI.getProjectContext(projectId);setContext(response.data);return response.data;}
+    catch(error){setContext(null);message.error(error.message);return null;}finally{setContextLoading(false);}
   };
-
-  const handleCreate = () => {
-    setEditingTask(null);
-    form.resetFields();
-    setModalVisible(true);
+  const openCreate=async (projectId,stageId)=>{
+    setEditingTask(null); form.resetFields(); setModalVisible(true);
+    form.setFieldsValue({
+      project_id:projectId||undefined,priority:'Trung bình',notify_before_days:1,
+      production_stage_instance_id:stageId||undefined,
+      work_item_ids:[],
+      assignments:[{}],
+    });
+    if(projectId) await loadContext(projectId); else setContext(null);
   };
-
-  const handleEdit = (record) => {
-    setEditingTask(record);
+  useEffect(()=>{
+    if(!deepLinkHandled&&linkedProjectId&&linkedStageId){setDeepLinkHandled(true);openCreate(linkedProjectId,linkedStageId);}
+  },[deepLinkHandled,linkedProjectId,linkedStageId]);
+  const openEdit=async record=>{
+    setEditingTask(record); setModalVisible(true); await loadContext(record.project_id);
     form.setFieldsValue({
       ...record,
-      start_date: record.start_date ? dayjs(record.start_date) : null,
-      end_date: record.end_date ? dayjs(record.end_date) : null,
     });
-    setModalVisible(true);
   };
-
-  const handleComplete = async (id) => {
-    try {
-      await axios.patch(`${API_URL}/tasks/${id}/complete`);
-      message.success('Đã đánh dấu hoàn thành');
-      loadTasks();
-    } catch (error) {
-      message.error('Không thể hoàn thành nhiệm vụ');
-    }
+  const changeProject=async projectId=>{
+    const data=await loadContext(projectId);
+    form.setFieldsValue({
+      work_item_id:undefined,
+      work_item_ids:[],
+      production_stage_instance_id:undefined,
+      assignments:[{}],
+    });
   };
-
-  const handleArchive = async (id) => {
-    try {
-      await axios.patch(`${API_URL}/tasks/${id}/archive`);
-      message.success('Đã lưu trữ nhiệm vụ');
-      loadTasks();
-    } catch (error) {
-      message.error('Không thể lưu trữ nhiệm vụ');
-    }
+  const changeEmployee=(index,employeeId)=>{
+    const employee=context?.employees?.find(item=>item.id===employeeId);
+    const fallback=context?.roles?.find(item=>item.is_default)?.name||context?.roles?.[0]?.name;
+    const assignments=form.getFieldValue('assignments')||[];
+    assignments[index]={...assignments[index],employee_id:employeeId,role_in_task:employee?.project_role||fallback};
+    form.setFieldValue('assignments',assignments);
   };
-
-  const handleDelete = async (id) => {
-    try {
-      await axios.delete(`${API_URL}/tasks/${id}`);
-      message.success('Xóa nhiệm vụ thành công');
-      loadTasks();
-    } catch (error) {
-      message.error('Không thể xóa nhiệm vụ');
-    }
-  };
-
-  const handleSubmit = async (values) => {
-    try {
-      const data = {
-        ...values,
-        start_date: values.start_date?.format('YYYY-MM-DD'),
-        end_date: values.end_date?.format('YYYY-MM-DD'),
-      };
-
-      if (editingTask) {
-        await axios.put(`${API_URL}/tasks/${editingTask.id}`, data);
-        message.success('Cập nhật nhiệm vụ thành công');
-      } else {
-        await axios.post(`${API_URL}/tasks`, data);
-        message.success('Tạo nhiệm vụ thành công');
-      }
-
-      setModalVisible(false);
-      form.resetFields();
-      loadTasks();
-    } catch (error) {
-      message.error(editingTask ? 'Không thể cập nhật nhiệm vụ' : 'Không thể tạo nhiệm vụ');
-    }
-  };
-
-  const getStatusColor = (status) => {
-    const colors = {
-      'Chưa bắt đầu': 'default',
-      'Đang thực hiện': 'processing',
-      'Chờ xử lý': 'warning',
-      'Hoàn thành': 'success',
-      'Lưu trữ': 'default',
-      'Hủy': 'error'
+  const submit=async values=>{
+    const serializeDate=value=>value?.format?.('YYYY-MM-DD')||value||null;
+    const payload={
+      ...values,
+      assignments:editingTask?undefined:(values.assignments||[]).filter(row=>row?.employee_id).map(row=>({
+        ...row,work_dates:(row.work_dates||[]).map(serializeDate),
+      })),
     };
-    return colors[status] || 'default';
+    try{
+      const response=editingTask?await taskAPI.update(editingTask.id,payload):await taskAPI.createBatch(payload);
+      const synced=response.synced_project_employees||[];
+      message.success(editingTask?'Đã cập nhật Công việc':response.message||(synced.length?`Đã tạo Công việc và thêm ${synced.length} nhân viên vào dự án`:'Đã tạo và phân công Công việc'));
+      if(response.warnings?.length) Modal.warning({title:'Cảnh báo lịch trùng',content:<ul>{response.warnings.map(item=><li key={item}>{item}</li>)}</ul>});
+      setModalVisible(false);form.resetFields();await loadTasks();
+    }catch(error){message.error(error.message);}
   };
+  const complete=async id=>{try{await taskAPI.complete(id);message.success('Đã hoàn thành nhiệm vụ');await loadTasks();}catch(error){message.error(error.message);}};
+  const archive=async id=>{try{await taskAPI.archive(id);message.success('Đã lưu trữ nhiệm vụ');await loadTasks();}catch(error){message.error(error.message);}};
+  const remove=async id=>{try{await taskAPI.delete(id);message.success('Đã xóa nhiệm vụ');await loadTasks();}catch(error){message.error(error.message);}};
 
-  const getTaskTypeColor = (type) => {
-    const colors = {
-      'Sản xuất': 'orange',
-      'Giao hàng': 'blue',
-      'Lắp đặt': 'green'
-    };
-    return colors[type] || 'default';
-  };
-
-  const columns = [
-    {
-      title: 'Mã nhiệm vụ',
-      dataIndex: 'task_code',
-      key: 'task_code',
-      width: 140,
-      fixed: 'left',
-      render: (text, record) => (
-        <Space direction="vertical" size={0}>
-          <a onClick={() => navigate(`/tasks/${record.id}`)}>{text}</a>
-          {record.is_overdue && (
-            <Tag icon={<WarningOutlined />} color="error" style={{ margin: 0 }}>
-              Quá hạn
-            </Tag>
-          )}
-        </Space>
-      ),
-    },
-    {
-      title: 'Tên nhiệm vụ',
-      dataIndex: 'task_name',
-      key: 'task_name',
-      width: 250,
-      ellipsis: true,
-    },
-    {
-      title: 'Loại',
-      dataIndex: 'task_type',
-      key: 'task_type',
-      width: 120,
-      render: (type) => <Tag color={getTaskTypeColor(type)}>{type}</Tag>,
-    },
-    {
-      title: 'Dự án',
-      dataIndex: 'project_name',
-      key: 'project_name',
-      width: 200,
-      ellipsis: true,
-    },
-    {
-      title: 'Thời gian',
-      key: 'dates',
-      width: 200,
-      render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <div>
-            Bắt đầu: {record.start_date ? dayjs(record.start_date).format('DD/MM/YYYY') : '-'}
-          </div>
-          <div>
-            Kết thúc: {record.end_date ? dayjs(record.end_date).format('DD/MM/YYYY') : '-'}
-          </div>
-        </Space>
-      ),
-    },
-    {
-      title: 'Địa điểm',
-      key: 'locations',
-      width: 120,
-      align: 'center',
-      render: (_, record) => (
-        <Space direction="vertical" size={0}>
-          <div style={{ fontSize: 18, fontWeight: 'bold' }}>
-            {record.completed_locations || 0}/{record.total_locations || 0}
-          </div>
-          <Progress
-            percent={
-              record.total_locations > 0
-                ? Math.round((record.completed_locations / record.total_locations) * 100)
-                : 0
-            }
-            size="small"
-            showInfo={false}
-          />
-        </Space>
-      ),
-    },
-    {
-      title: 'Nhân sự',
-      dataIndex: 'total_assigned_employees',
-      key: 'employees',
-      width: 80,
-      align: 'center',
-      render: (count) => <Badge count={count} showZero />,
-    },
-    {
-      title: 'Tiến độ',
-      dataIndex: 'progress',
-      key: 'progress',
-      width: 120,
-      render: (progress) => <Progress percent={progress || 0} size="small" />,
-    },
-    {
-      title: 'Trạng thái',
-      dataIndex: 'status',
-      key: 'status',
-      width: 130,
-      render: (status) => <Tag color={getStatusColor(status)}>{status}</Tag>,
-    },
-    {
-      title: 'Hành động',
-      key: 'action',
-      width: 180,
-      fixed: 'right',
-      render: (_, record) => (
-        <Space size="small" wrap>
-          <Tooltip title="Xem chi tiết">
-            <Button
-              type="link"
-              icon={<EyeOutlined />}
-              onClick={() => navigate(`/tasks/${record.id}`)}
-              size="small"
-            />
-          </Tooltip>
-          {!record.is_completed && (
-            <>
-              <Tooltip title="Chỉnh sửa">
-                <Button
-                  type="link"
-                  icon={<EditOutlined />}
-                  onClick={() => handleEdit(record)}
-                  size="small"
-                />
-              </Tooltip>
-              <Tooltip title="Hoàn thành">
-                <Button
-                  type="link"
-                  icon={<CheckCircleOutlined />}
-                  onClick={() => handleComplete(record.id)}
-                  size="small"
-                  style={{ color: '#52c41a' }}
-                />
-              </Tooltip>
-            </>
-          )}
-          {record.is_completed && !record.is_archived && (
-            <Tooltip title="Lưu trữ">
-              <Button
-                type="link"
-                icon={<InboxOutlined />}
-                onClick={() => handleArchive(record.id)}
-                size="small"
-              />
-            </Tooltip>
-          )}
-          <Tooltip title="Xóa">
-            <Button
-              type="link"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => {
-                Modal.confirm({
-                  title: 'Xác nhận xóa',
-                  content: 'Bạn có chắc muốn xóa nhiệm vụ này?',
-                  onOk: () => handleDelete(record.id),
-                });
-              }}
-              size="small"
-            />
-          </Tooltip>
-        </Space>
-      ),
-    },
+  const statusColor=status=>({'Chưa bắt đầu':'default','Đang thực hiện':'processing','Chờ xử lý':'warning','Hoàn thành':'success','Tạm dừng':'orange','Hủy':'error'}[status]||'default');
+  const columns=[
+    {title:'Công việc',key:'task',width:230,render:(_,record)=><Space direction="vertical" size={0}><a onClick={()=>navigate(`/tasks/${record.id}`)}><strong>{record.task_name}</strong></a><Text type="secondary">{record.task_code}</Text>{record.is_overdue&&<Tag icon={<WarningOutlined/>} color="error">Quá hạn</Tag>}</Space>},
+    {title:'Công đoạn',key:'stage',width:220,render:(_,record)=>record.production_stage_instance_id?<Space direction="vertical" size={0}><Tag color="purple">{record.stage_sequence_no}. {record.stage_name}</Tag><Text type="secondary">{record.production_group_name} · {record.production_code}</Text></Space>:<Text type="secondary">Công việc chung</Text>},
+    {title:'Nhóm công việc',dataIndex:'work_group_name',width:140,render:(value,record)=><Tag color={record.work_group_color||'blue'}>{value||record.task_type}</Tag>},
+    {title:'Nhân viên',dataIndex:'assignments',width:250,render:rows=>rows?.length?<Space direction="vertical" size={4}>{rows.map(row=><span key={row.id}><TeamOutlined/> {row.full_name} <Text type="secondary">· {Number(row.planned_hours||0)}h</Text></span>)}</Space>:<Text type="secondary">Chưa phân công</Text>},
+    {title:'Kế hoạch tự động',key:'dates',width:210,render:(_,record)=><Space direction="vertical" size={0}><span>{record.start_date?dayjs(record.start_date).format('DD/MM/YYYY'):'-'} → {record.end_date?dayjs(record.end_date).format('DD/MM/YYYY'):'-'}</span><Text type="secondary">{record.estimated_duration||0} ngày · {Number(record.estimated_hours||0)} giờ</Text></Space>},
+    {title:'Tiến độ',dataIndex:'progress',width:130,render:value=><Progress percent={value||0} size="small"/>},
+    {title:'Trạng thái',dataIndex:'status',width:130,render:value=><Tag color={statusColor(value)}>{value}</Tag>},
+    {title:'Thao tác',key:'actions',width:170,render:(_,record)=><Space size="small">
+      <Tooltip title="Chi tiết"><Button type="link" icon={<EyeOutlined/>} onClick={()=>navigate(`/tasks/${record.id}`)}/></Tooltip>
+      {!record.is_completed&&<><Tooltip title="Sửa"><Button type="link" icon={<EditOutlined/>} onClick={()=>openEdit(record)}/></Tooltip><Tooltip title="Hoàn thành"><Button type="link" style={{color:'#52c41a'}} icon={<CheckCircleOutlined/>} onClick={()=>complete(record.id)}/></Tooltip></>}
+      {record.is_completed&&!record.is_archived&&<Tooltip title="Lưu trữ"><Button type="link" icon={<InboxOutlined/>} onClick={()=>archive(record.id)}/></Tooltip>}
+      <Tooltip title="Xóa Công việc"><Button type="link" danger icon={<DeleteOutlined/>} onClick={()=>Modal.confirm({title:'Xóa Công việc?',content:record.production_stage_instance_id?'Công đoạn và số lượng Đơn hàng vẫn được giữ nguyên.':record.task_name,onOk:()=>remove(record.id)})}/></Tooltip>
+    </Space>},
   ];
 
-  // Calculate statistics
-  const stats = {
-    total: tasks.length,
-    notStarted: tasks.filter((t) => t.status === 'Chưa bắt đầu').length,
-    inProgress: tasks.filter((t) => t.status === 'Đang thực hiện').length,
-    waiting: tasks.filter((t) => t.status === 'Chờ xử lý').length,
-    completed: tasks.filter((t) => t.status === 'Hoàn thành').length,
-    overdue: tasks.filter((t) => t.is_overdue).length,
-  };
+  const executionTasks=useMemo(()=>tasks.filter(task=>task.production_order_id),[tasks]);
+  const stats={total:executionTasks.length,pending:executionTasks.filter(x=>x.status==='Chưa bắt đầu').length,active:executionTasks.filter(x=>x.status==='Đang thực hiện').length,completed:executionTasks.filter(x=>x.status==='Hoàn thành').length};
+  const visibleProjects=useMemo(()=>projects.filter(project=>{
+    if(filters.project_id&&project.id!==filters.project_id)return false;
+    const needle=search.trim().toLowerCase();
+    return !needle||`${project.project_code} ${project.project_name} ${project.company_name||''}`.toLowerCase().includes(needle);
+  }),[projects,filters.project_id,search]);
+  const visibleTasks=useMemo(()=>{
+    const needle=search.trim().toLowerCase();
+    return executionTasks.filter(task=>!needle||`${task.task_code} ${task.task_name} ${task.project_name} ${task.company_name||''} ${task.work_group_name||task.task_type||''}`.toLowerCase().includes(needle));
+  },[executionTasks,search]);
+  const workGroups=useMemo(()=>{
+    const map=new Map();
+    for(const item of context?.work_items||[]){if(!map.has(item.group_name))map.set(item.group_name,[]);map.get(item.group_name).push(item);}
+    return [...map.entries()];
+  },[context]);
+  const projectMembers=useMemo(()=>(context?.employees||[]).filter(item=>item.is_project_member),[context]);
+  const availableEmployees=useMemo(()=>(context?.employees||[]).filter(item=>!item.is_project_member),[context]);
+  const employeeOptions=useMemo(()=>[
+    {label:`Nhân sự dự án (${projectMembers.length})`,options:projectMembers.map(item=>({value:item.id,label:`${item.full_name} — ${item.project_role||item.position||''}`}))},
+    {label:`Nhân viên khác (${availableEmployees.length})`,options:availableEmployees.map(item=>({value:item.id,label:`${item.full_name} — ${item.position||item.department||''}`}))},
+  ].filter(group=>group.options.length),[projectMembers,availableEmployees]);
 
-  return (
-    <div>
-      <div className="page-header">
-        <h1>Quản lý Nhiệm vụ</h1>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-          Tạo nhiệm vụ mới
-        </Button>
-      </div>
+  const stageTaskColumns=[columns[0],...columns.slice(2)];
+  const quantity=value=>Number(value||0).toLocaleString('vi-VN',{maximumFractionDigits:3});
+  const productionItemColumns=[
+    {title:'Mặt hàng thi công',dataIndex:'item_name',render:(value,row)=><Space direction="vertical" size={0}><Text strong>{value}</Text>{row.item_code&&<Text type="secondary">{row.item_code}</Text>}</Space>},
+    {title:'Số lượng Lệnh SX',key:'planned',width:170,align:'right',render:(_,row)=>`${quantity(row.planned_quantity)} ${row.unit}`},
+    {title:'Đã hoàn thành',key:'completed',width:190,align:'right',render:(_,row)=><Text strong>{quantity(row.completed_quantity)} / {quantity(row.planned_quantity)} {row.unit}</Text>},
+  ];
+  const collapseItems=visibleProjects.map(project=>{
+    const projectTasks=executionTasks.filter(task=>task.project_id===project.id);
+    const stages=productionStages.filter(stage=>stage.project_id===project.id);
+    const productionOrders=new Map();
+    for(const stage of stages){
+      if(!productionOrders.has(stage.production_order_id))productionOrders.set(stage.production_order_id,{...stage,stages:[]});
+      productionOrders.get(stage.production_order_id).stages.push(stage);
+    }
+    return {key:String(project.id),label:<Space wrap><ProjectOutlined/><strong>{project.project_name}</strong><Tag>{project.project_type||'Chưa phân loại'}</Tag>{project.company_name&&<Text type="secondary">KH: {project.company_name}</Text>}<Badge count={projectTasks.length} showZero color="#1677ff"/></Space>,children:<Card bordered={false} extra={<Button onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Quản lý Đơn hàng / Lệnh SX</Button>}>
+      <Space direction="vertical" style={{width:'100%'}} size={16}>
+        {[...productionOrders.values()].map(production=><Card key={production.production_order_id} size="small" title={<Space wrap><Tag color="geekblue">Lệnh SX ID: {production.production_code}</Tag><strong>{production.group_name||production.process_name}</strong><Text type="secondary">Đơn {production.order_code}</Text><Tag>{productionStatusLabel[production.production_status]||production.production_status}</Tag></Space>} extra={<Button onClick={()=>navigate(`/orders?tab=production&project_id=${project.id}&order_id=${production.order_id}&production_id=${production.production_order_id}`)}>Mở Lệnh SX</Button>}>
+            <Table rowKey="order_item_id" size="small" pagination={false} dataSource={production.production_items||[]} columns={productionItemColumns}/>
+            <Collapse style={{marginTop:10}} items={production.stages.map(stage=>{
+              const stageTasks=projectTasks.filter(task=>task.production_stage_instance_id===stage.id);
+              return {key:String(stage.id),label:<Space wrap><Tag color="purple">{stage.sequence_no}</Tag><strong>{stage.stage_name}</strong><Text type="secondary">{stage.planned_start_date?dayjs(stage.planned_start_date).format('DD/MM/YYYY'):'-'} → {stage.planned_end_date?dayjs(stage.planned_end_date).format('DD/MM/YYYY'):'-'}</Text><Badge count={stageTasks.length} showZero color="#722ed1"/></Space>,extra:<Button size="small" type="primary" icon={<PlusOutlined/>} onClick={event=>{event.stopPropagation();openCreate(project.id,stage.id);}}>Thêm Công việc</Button>,children:stageTasks.length?<Table rowKey="id" columns={stageTaskColumns} dataSource={stageTasks} loading={loading} pagination={false} scroll={{x:1000}}/>:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Công đoạn chưa có Công việc"/>};
+            })}/>
+        </Card>)}
+        {!productionOrders.size&&<Empty description="Dự án chưa có Lệnh sản xuất"><Button type="primary" onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Sang Đơn hàng để tạo Lệnh SX</Button></Empty>}
+      </Space>
+    </Card>};
+  });
 
-      {/* Statistics */}
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} md={8} lg={4}>
-          <Card>
-            <Statistic title="Tổng số" value={stats.total} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Chưa bắt đầu"
-              value={stats.notStarted}
-              valueStyle={{ color: '#999' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Đang thực hiện"
-              value={stats.inProgress}
-              valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Chờ xử lý"
-              value={stats.waiting}
-              valueStyle={{ color: '#fa8c16' }}
-              prefix={<ClockCircleOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Hoàn thành"
-              value={stats.completed}
-              valueStyle={{ color: '#52c41a' }}
-              prefix={<CheckCircleOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8} lg={4}>
-          <Card>
-            <Statistic
-              title="Quá hạn"
-              value={stats.overdue}
-              valueStyle={{ color: '#ff4d4f' }}
-              prefix={<WarningOutlined />}
-            />
-          </Card>
-        </Col>
-      </Row>
+  const crossViewColumns=[
+    columns[0],
+    {title:'Dự án',dataIndex:'project_name',width:210,render:(value,record)=><Space direction="vertical" size={0}><Text strong>{value}</Text><Text type="secondary">{record.project_code}</Text></Space>},
+    ...columns.slice(1),
+  ];
+  const groupItems=useMemo(()=>{
+    const grouped=new Map();
+    for(const task of visibleTasks){
+      const key=task.work_group_name||task.task_type||'Chưa phân nhóm';
+      if(!grouped.has(key))grouped.set(key,[]);
+      grouped.get(key).push(task);
+    }
+    return [...grouped.entries()].map(([groupName,rows])=>({
+      key:groupName,label:<Space><Tag color={rows[0]?.work_group_color||'blue'}>{groupName}</Tag><Badge count={rows.length} showZero color="#1677ff"/></Space>,
+      children:<Table rowKey="id" columns={crossViewColumns} dataSource={rows} loading={loading} pagination={false} scroll={{x:1400}}/>,
+    }));
+  },[visibleTasks,loading]);
+  const employeeItems=useMemo(()=>{
+    const grouped=new Map();
+    for(const task of visibleTasks){
+      for(const assignment of task.assignments||[]){
+        if(!grouped.has(assignment.employee_id))grouped.set(assignment.employee_id,{employee:assignment,rows:[]});
+        grouped.get(assignment.employee_id).rows.push({...task,assignment_key:`${task.id}-${assignment.id}`,focus_assignment:assignment});
+      }
+    }
+    const employeeColumns=[
+      {title:'Công việc',key:'task',width:230,render:(_,record)=><Space direction="vertical" size={0}><a onClick={()=>navigate(`/tasks/${record.id}`)}><strong>{record.task_name}</strong></a><Text type="secondary">{record.task_code}</Text></Space>},
+      {title:'Dự án',dataIndex:'project_name',width:220},
+      {title:'Nhóm',key:'group',width:130,render:(_,record)=><Tag color={record.work_group_color||'blue'}>{record.work_group_name||record.task_type}</Tag>},
+      {title:'Vai trò',key:'role',width:150,render:(_,record)=>record.focus_assignment.role_in_task||'-'},
+      {title:'Ngày được giao',key:'work_dates',width:220,render:(_,record)=>{const assignment=record.focus_assignment;return <Space direction="vertical" size={0}><span>{assignment.start_date?dayjs(assignment.start_date).format('DD/MM/YYYY'):'-'} → {assignment.end_date?dayjs(assignment.end_date).format('DD/MM/YYYY'):'-'}</span><Text type="secondary">{assignment.planned_days||0} ngày · {Number(assignment.planned_hours||0)} giờ</Text></Space>;}},
+      {title:'Trạng thái',dataIndex:'status',width:130,render:value=><Tag color={statusColor(value)}>{value}</Tag>},
+    ];
+    return [...grouped.values()].sort((a,b)=>a.employee.full_name.localeCompare(b.employee.full_name,'vi')).map(({employee,rows})=>({
+      key:String(employee.employee_id),label:<Space><TeamOutlined/><strong>{employee.full_name}</strong><Badge count={rows.length} showZero color="#722ed1"/></Space>,
+      children:<Table rowKey="assignment_key" columns={employeeColumns} dataSource={rows} pagination={false} scroll={{x:1100}}/>,
+    }));
+  },[visibleTasks]);
 
-      {/* Filters */}
-      <Card style={{ marginBottom: 16 }}>
-        <Space wrap>
-          <Select
-            placeholder="Chọn dự án"
-            style={{ width: 200 }}
-            allowClear
-            onChange={(value) => setFilters({ ...filters, project_id: value || '' })}
-            showSearch
-            optionFilterProp="children"
-          >
-            {projects.map((p) => (
-              <Option key={p.id} value={p.id}>
-                {p.project_name}
-              </Option>
-            ))}
-          </Select>
-          <Select
-            placeholder="Loại nhiệm vụ"
-            style={{ width: 150 }}
-            allowClear
-            onChange={(value) => setFilters({ ...filters, task_type: value || '' })}
-          >
-            {taskTypes.map((item) => (
-              <Option key={item.id} value={item.name}>
-                {item.name}
-              </Option>
-            ))}
-          </Select>
-          <Select
-            placeholder="Trạng thái"
-            style={{ width: 150 }}
-            allowClear
-            onChange={(value) => setFilters({ ...filters, status: value || '' })}
-          >
-            <Option value="Chưa bắt đầu">Chưa bắt đầu</Option>
-            <Option value="Đang thực hiện">Đang thực hiện</Option>
-            <Option value="Chờ xử lý">Chờ xử lý</Option>
-            <Option value="Hoàn thành">Hoàn thành</Option>
-          </Select>
-          <Button
-            type={filters.is_overdue ? 'primary' : 'default'}
-            danger={filters.is_overdue}
-            icon={<WarningOutlined />}
-            onClick={() => setFilters({ ...filters, is_overdue: !filters.is_overdue })}
-          >
-            Chỉ quá hạn
-          </Button>
-          <Button
-            type={filters.is_archived ? 'primary' : 'default'}
-            icon={<InboxOutlined />}
-            onClick={() => setFilters({ ...filters, is_archived: !filters.is_archived })}
-          >
-            {filters.is_archived ? 'Đang xem lưu trữ' : 'Xem lưu trữ'}
-          </Button>
-        </Space>
-      </Card>
+  const taskContent=viewMode==='project'
+    ? (collapseItems.length?<Collapse activeKey={activeKeys} onChange={keys=>setActiveKeys(keys)} items={collapseItems}/>:<Card><Empty description="Chưa có dự án phù hợp"/></Card>)
+    : viewMode==='group'
+      ? (groupItems.length?<Collapse defaultActiveKey={groupItems.slice(0,3).map(item=>item.key)} items={groupItems}/>:<Card><Empty description="Chưa có nhóm công việc phù hợp"/></Card>)
+      : (employeeItems.length?<Collapse defaultActiveKey={employeeItems.slice(0,3).map(item=>item.key)} items={employeeItems}/>:<Card><Empty description="Chưa có nhân viên được phân công"/></Card>);
 
-      {/* Table */}
-      <Card>
-        <Table
-          columns={columns}
-          dataSource={tasks}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1600 }}
-          pagination={{
-            showSizeChanger: true,
-            showTotal: (total) => `Tổng ${total} nhiệm vụ`,
-          }}
-        />
-      </Card>
+  return <div>
+    <div className="page-header"><div><h1 style={{marginBottom:4}}>Nhiệm vụ &amp; Phân công</h1><Text type="secondary">2.6.0-I — Chi tiết thi công được tổ chức theo Lệnh sản xuất</Text></div><Button onClick={()=>navigate('/orders')}>Đơn hàng / Lệnh SX</Button></div>
+    <Row gutter={16} style={{marginBottom:20}}><Col xs={12} md={6}><Card><Statistic title="Tổng công việc" value={stats.total}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Chưa bắt đầu" value={stats.pending}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Đang thực hiện" value={stats.active} valueStyle={{color:'#1677ff'}}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Hoàn thành" value={stats.completed} valueStyle={{color:'#52c41a'}}/></Card></Col></Row>
+    <Card style={{marginBottom:16}}><Space direction="vertical" size={12} style={{width:'100%'}}>
+      <Space wrap><Segmented value={viewMode} onChange={setViewMode} options={[{value:'project',label:'Theo Dự án',icon:<ProjectOutlined/>},{value:'group',label:'Theo Nhóm công việc'},{value:'employee',label:'Theo Nhân viên',icon:<TeamOutlined/>}]}/>{viewMode==='employee'&&<Button onClick={()=>navigate('/employees/availability')}>Mở Tình trạng nhân viên</Button>}</Space>
+      <Space wrap><Input.Search allowClear placeholder="Tìm dự án hoặc khách hàng" style={{width:280}} onSearch={setSearch} onChange={event=>!event.target.value&&setSearch('')}/><Select allowClear placeholder="Lọc dự án" style={{width:240}} options={projects.map(x=>({value:x.id,label:x.project_name}))} onChange={value=>setFilters(previous=>({...previous,project_id:value||''}))}/><Select allowClear placeholder="Trạng thái công việc" style={{width:180}} options={['Chưa bắt đầu','Đang thực hiện','Tạm dừng','Chờ xử lý','Hoàn thành'].map(value=>({value,label:value}))} onChange={value=>setFilters(previous=>({...previous,status:value||''}))}/><DatePicker.RangePicker format="DD/MM/YYYY" placeholder={['Từ ngày','Đến ngày']} onChange={dates=>setFilters(previous=>({...previous,from_date:dates?.[0]?.format('YYYY-MM-DD')||'',to_date:dates?.[1]?.format('YYYY-MM-DD')||''}))}/><Button danger={filters.is_overdue} type={filters.is_overdue?'primary':'default'} icon={<WarningOutlined/>} onClick={()=>setFilters(previous=>({...previous,is_overdue:!previous.is_overdue}))}>Chỉ quá hạn</Button></Space>
+    </Space></Card>
+    {taskContent}
 
-      {/* Create/Edit Modal */}
-      <Modal
-        title={editingTask ? 'Cập nhật nhiệm vụ' : 'Tạo nhiệm vụ mới'}
-        open={modalVisible}
-        onCancel={() => setModalVisible(false)}
-        footer={null}
-        width={800}
-      >
-        <Form form={form} layout="vertical" onFinish={handleSubmit}>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="project_id"
-                label="Dự án"
-                rules={[{ required: true, message: 'Vui lòng chọn dự án' }]}
-              >
-                <Select
-                  placeholder="Chọn dự án"
-                  showSearch
-                  optionFilterProp="children"
-                >
-                  {projects.map((p) => (
-                    <Option key={p.id} value={p.id}>
-                      {p.project_name}
-                    </Option>
-                  ))}
-                </Select>
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="task_type"
-                label="Loại nhiệm vụ"
-                rules={[{ required: true, message: 'Vui lòng chọn loại nhiệm vụ' }]}
-              >
-                <Select placeholder="Chọn loại" showSearch optionFilterProp="children">
-                  {taskTypes.map(item => <Option key={item.id} value={item.name}>{item.name}</Option>)}
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item
-            name="task_name"
-            label="Tên nhiệm vụ"
-            rules={[{ required: true, message: 'Vui lòng nhập tên nhiệm vụ' }]}
-          >
-            <Input placeholder="Nhập tên nhiệm vụ" />
-          </Form.Item>
-
-          <Form.Item name="description" label="Mô tả">
-            <Input.TextArea rows={3} placeholder="Nhập mô tả chi tiết" />
-          </Form.Item>
-
-          <Row gutter={16}>
-            <Col span={8}>
-              <Form.Item name="start_date" label="Ngày bắt đầu">
-                <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="end_date" label="Ngày kết thúc">
-                <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="priority" label="Ưu tiên">
-                <Select placeholder="Chọn mức độ">
-                  <Option value="Thấp">Thấp</Option>
-                  <Option value="Trung bình">Trung bình</Option>
-                  <Option value="Cao">Cao</Option>
-                  <Option value="Khẩn cấp">Khẩn cấp</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="estimated_duration" label="Thời gian dự kiến (ngày)">
-                <InputNumber
-                  style={{ width: '100%' }}
-                  min={1}
-                  placeholder="Số ngày"
-                />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="estimated_hours" label="Số giờ dự kiến">
-                <InputNumber
-                  style={{ width: '100%' }}
-                  min={0}
-                  step={0.5}
-                  placeholder="Tổng số giờ"
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item name="notify_before_days" label="Thông báo trước (ngày)" initialValue={1}>
-            <InputNumber style={{ width: '100%' }} min={0} />
-          </Form.Item>
-
-          <Form.Item name="notes" label="Ghi chú">
-            <Input.TextArea rows={2} placeholder="Ghi chú thêm" />
-          </Form.Item>
-
-          <Form.Item>
-            <Space>
-              <Button type="primary" htmlType="submit">
-                {editingTask ? 'Cập nhật' : 'Tạo mới'}
-              </Button>
-              <Button onClick={() => setModalVisible(false)}>Hủy</Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
-    </div>
-  );
-};
-
-export default TaskList;
+    <Modal title={editingTask?'Cập nhật Công việc':`Tạo và phân công Công việc${context?.project?.project_name?` — ${context.project.project_name}`:''}`} open={modalVisible} onCancel={()=>setModalVisible(false)} footer={null} width={1080} destroyOnClose>
+      <Form form={form} layout="vertical" onFinish={submit}>
+        <Form.Item name="project_id" hidden rules={[{required:true,message:'Chọn dự án'}]}><Input/></Form.Item>
+        {!context&&<Form.Item label="Chọn dự án để phân công" required><Select showSearch optionFilterProp="label" loading={contextLoading} options={projects.map(x=>({value:x.id,label:`${x.project_code} — ${x.project_name}`}))} onChange={projectId=>{form.setFieldValue('project_id',projectId);changeProject(projectId);}}/></Form.Item>}
+        {context&&<Card size="small" title="Thông tin dự án" extra={<Button type="link" onClick={()=>navigate(`/projects/${context.project.id}`)}>Mở dự án để chỉnh sửa</Button>} style={{marginBottom:16}}>
+          <Descriptions size="small" column={3}>
+            <Descriptions.Item label="Mã">{context.project.project_code}</Descriptions.Item>
+            <Descriptions.Item label="Dự án">{context.project.project_name}</Descriptions.Item>
+            <Descriptions.Item label="Khách hàng">{context.project.company_name||'-'}</Descriptions.Item>
+            <Descriptions.Item label="Loại">{context.project.project_type||'-'}</Descriptions.Item>
+            <Descriptions.Item label="Thời gian">{context.project.start_date?dayjs(context.project.start_date).format('DD/MM/YYYY'):'-'} → {context.project.end_date?dayjs(context.project.end_date).format('DD/MM/YYYY'):'-'}</Descriptions.Item>
+            <Descriptions.Item label="Trạng thái"><Tag>{context.project.status}</Tag></Descriptions.Item>
+          </Descriptions>
+        </Card>}
+        {context?.production_stages?.length>0&&<Form.Item name="production_stage_instance_id" label="Công đoạn sản xuất"><Select allowClear showSearch optionFilterProp="label" placeholder="Chọn Công đoạn nếu Công việc thuộc Kế hoạch sản xuất" options={context.production_stages.map(stage=>({value:stage.id,label:`${stage.production_code} · ${stage.sequence_no}. ${stage.stage_name} — ${stage.group_name}`}))}/></Form.Item>}
+        {editingTask?<Form.Item name="work_item_id" label="Công việc thực hiện" rules={!editingTask.work_item_id?[]:[{required:true,message:'Chọn Công việc'}]}><Select showSearch optionFilterProp="label" disabled={!context} loading={contextLoading} onOpenChange={open=>{if(open&&context?.project?.id)loadContext(context.project.id);}} options={workGroups.map(([label,items])=>({label,options:items.map(item=>({value:item.id,label:item.name}))}))} placeholder="Chọn Công việc phù hợp"/></Form.Item>:<Form.Item name="work_item_ids" label="Các Công việc thực hiện" rules={[{required:true,type:'array',min:1,message:'Chọn ít nhất một Công việc'}]} extra="Có thể chọn đồng thời Giám sát, Thiết kế hoặc nhiều Công việc khác; mỗi lựa chọn tạo một Công việc độc lập với cùng nhân viên và lịch đã đánh dấu."><Select mode="multiple" maxTagCount="responsive" showSearch optionFilterProp="label" disabled={!context} loading={contextLoading} onOpenChange={open=>{if(open&&context?.project?.id)loadContext(context.project.id);}} options={workGroups.map(([label,items])=>({label,options:items.map(item=>({value:item.id,label:item.name}))}))} placeholder={context?.work_items?.length?'Chọn một hoặc nhiều Công việc':'Chưa cấu hình Công việc cho Loại dự án'}/></Form.Item>}
+        {editingTask&&!editingTask.work_item_id&&<><Alert type="warning" showIcon message="Task cũ chưa liên kết Danh mục công việc" style={{marginBottom:12}}/><Row gutter={16}><Col span={12}><Form.Item name="task_type" label="Nhóm cũ" rules={[{required:true}]}><Input/></Form.Item></Col><Col span={12}><Form.Item name="task_name" label="Tên công việc cũ" rules={[{required:true}]}><Input/></Form.Item></Col></Row></>}
+        {context&&<Alert showIcon type="info" message={`${context.production_stages?.length||0} Công đoạn · ${context.work_items.length} Công việc phù hợp · ${projectMembers.length} nhân sự dự án`} description="Công đoạn là khung Quy trình; Công việc và lịch nhân sự được tạo tại đây. Nếu không thuộc sản xuất, có thể để trống Công đoạn." style={{marginBottom:16}}/>}
+        <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2}/></Form.Item>
+        <Row gutter={16}><Col span={8}><Form.Item name="priority" label="Ưu tiên"><Select options={['Thấp','Trung bình','Cao','Khẩn cấp'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={8}><Form.Item name="notify_before_days" label="Nhắc trước (ngày)"><Select options={[0,1,2,3,5,7].map(value=>({value,label:`${value} ngày`}))}/></Form.Item></Col></Row>
+        {!editingTask&&<><Divider orientation="left">Nhân viên và lịch làm việc</Divider><Form.List name="assignments">{(fields,{add,remove})=><Space direction="vertical" style={{width:'100%'}} size={12}>{fields.map(field=>{
+          const employeeId=form.getFieldValue(['assignments',field.name,'employee_id']);
+          const employee=context?.employees?.find(item=>item.id===employeeId);
+          return <Card size="small" key={field.key} title={`Phân công ${field.name+1}`} extra={<Button danger type="text" icon={<DeleteOutlined/>} onClick={()=>remove(field.name)}>Xóa</Button>}><Row gutter={12}><Col span={12}><Form.Item {...field} name={[field.name,'employee_id']} label="Nhân viên" rules={[{required:true,message:'Chọn nhân viên'}]}><Select showSearch optionFilterProp="label" options={employeeOptions} onChange={value=>changeEmployee(field.name,value)}/></Form.Item>{employee&&!employee.is_project_member&&<Tag color="gold" style={{marginBottom:12}}>Sẽ thêm vào dự án</Tag>}</Col><Col span={12}><Form.Item {...field} name={[field.name,'role_in_task']} label="Vai trò" rules={[{required:true,message:'Chọn vai trò'}]}><Select options={(context?.roles||[]).map(role=>({value:role.name,label:role.name}))}/></Form.Item></Col></Row><Form.Item {...field} name={[field.name,'work_dates']} label="Đánh dấu ngày làm việc" rules={[{validator:(_,value)=>Array.isArray(value)&&value.length?Promise.resolve():Promise.reject(new Error('Chọn ít nhất một ngày làm việc'))}]}><AssignmentWorkCalendar/></Form.Item></Card>})}<Button block type="dashed" icon={<PlusOutlined/>} onClick={()=>add({})}>Thêm nhân viên</Button></Space>}</Form.List></>}
+        {editingTask&&<Alert type="info" showIcon message="Phân công nhân viên được quản lý trong trang Chi tiết Task để không làm mất lịch hiện có." style={{marginTop:12}}/>}
+        <Form.Item name="notes" label="Ghi chú" style={{marginTop:16}}><Input.TextArea rows={2}/></Form.Item>
+        <Space><Button type="primary" htmlType="submit" disabled={!editingTask&&!context?.work_items?.length}>{editingTask?'Cập nhật Công việc':'Tạo và phân công Công việc'}</Button><Button onClick={()=>setModalVisible(false)}>Hủy</Button></Space>
+      </Form>
+    </Modal>
+  </div>;
+}

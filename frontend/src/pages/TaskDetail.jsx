@@ -43,6 +43,9 @@ import axios from 'axios';
 import Papa from 'papaparse';
 import TaskReportTab from '../components/TaskReportTab';
 import EditableLocationTable from '../components/EditableLocationTable';
+import AssignmentWorkCalendar, { enumerateWorkDates } from '../components/AssignmentWorkCalendar';
+import ProjectExecutionPanel from '../components/ProjectExecutionPanel';
+import { workCatalogAPI } from '../services/api';
 import {
   PlayCircleOutlined,
   PauseCircleOutlined,
@@ -60,9 +63,11 @@ const TaskDetail = () => {
   const [loading, setLoading] = useState(true);
   const [locationModalVisible, setLocationModalVisible] = useState(false);
   const [assignModalVisible, setAssignModalVisible] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState(null);
   const [csvModalVisible, setCsvModalVisible] = useState(false);
   const [employees, setEmployees] = useState([]);
   const [projectEmployees, setProjectEmployees] = useState([]);
+  const [projectRoles, setProjectRoles] = useState([]);
   const [locationForm] = Form.useForm();
   const [assignForm] = Form.useForm();
 const [actionModalVisible, setActionModalVisible] = useState(false);
@@ -144,8 +149,9 @@ const openActionModal = (type) => {
 
   const loadProjectEmployees = async (projectId) => {
     try {
-      const response = await axios.get(`${API_URL}/projects/${projectId}`);
-      setProjectEmployees(response.data.data.employees || []);
+      const response = await workCatalogAPI.getProjectContext(projectId);
+      setProjectEmployees(response.data.employees || []);
+      setProjectRoles(response.data.roles || []);
     } catch (error) {
       console.error('Error loading project employees:', error);
     }
@@ -196,18 +202,30 @@ const openActionModal = (type) => {
 
   const handleAssignEmployee = async (values) => {
     try {
-      await axios.post(`${API_URL}/tasks/${id}/assignments`, {
+      const response=await axios.post(`${API_URL}/tasks/${id}/assignments`, {
         ...values,
-        start_date: values.start_date?.format('YYYY-MM-DD'),
-        end_date: values.end_date?.format('YYYY-MM-DD'),
       });
-      message.success('Phân công nhân viên thành công');
+      message.success(editingAssignment?'Đã cập nhật lịch phân công':response.data.synced_to_project?'Phân công thành công và đã thêm nhân viên vào dự án':'Phân công nhân viên thành công');
+      if(response.data.warnings?.length)Modal.warning({title:'Cảnh báo lịch trùng',content:<ul>{response.data.warnings.map(item=><li key={item}>{item}</li>)}</ul>});
       setAssignModalVisible(false);
+      setEditingAssignment(null);
       assignForm.resetFields();
       loadTask();
     } catch (error) {
       message.error(error.response?.data?.message || 'Không thể phân công nhân viên');
     }
+  };
+
+  const openAssignmentModal = (assignment = null) => {
+    setEditingAssignment(assignment);
+    assignForm.resetFields();
+    assignForm.setFieldsValue(assignment ? {
+      employee_id:assignment.employee_id,
+      role_in_task:assignment.role_in_task,
+      work_dates:assignment.work_dates || enumerateWorkDates(assignment.start_date,assignment.end_date),
+      notes:assignment.notes,
+    } : { work_dates: enumerateWorkDates(task?.start_date,task?.end_date) });
+    setAssignModalVisible(true);
   };
 
   const handleRemoveAssignment = async (assignmentId) => {
@@ -262,23 +280,20 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
       key: 'phone',
     },
     {
-      title: 'Tổng giờ',
-      dataIndex: 'total_hours',
-      key: 'total_hours',
-      render: (hours) => hours ? `${hours}h` : '0h',
+      title: 'Lịch dự kiến',
+      key: 'plan',
+      render: (_,record) => <Space direction="vertical" size={0}><span>{record.start_date?dayjs(record.start_date).format('DD/MM/YYYY'):'-'} → {record.end_date?dayjs(record.end_date).format('DD/MM/YYYY'):'-'}</span><span style={{color:'#64748b'}}>{record.planned_days||0} ngày · {Number(record.planned_hours||0)}h</span></Space>,
     },
     {
       title: 'Hành động',
       key: 'action',
       render: (_, record) => (
-        <Popconfirm
-          title="Xác nhận xóa phân công?"
-          onConfirm={() => handleRemoveAssignment(record.id)}
-        >
-          <Button type="link" danger icon={<DeleteOutlined />} size="small">
-            Xóa
-          </Button>
-        </Popconfirm>
+        <Space>
+          <Button type="link" icon={<EditOutlined />} size="small" onClick={()=>openAssignmentModal(record)}>Sửa lịch</Button>
+          <Popconfirm title="Xác nhận xóa phân công?" onConfirm={() => handleRemoveAssignment(record.id)}>
+            <Button type="link" danger icon={<DeleteOutlined />} size="small">Xóa</Button>
+          </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -292,7 +307,13 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
           Địa điểm lắp đặt ({task.total_locations || 0})
         </span>
       ),
-      children: (
+      children: task.execution_type ? (
+        <ProjectExecutionPanel
+          projectId={Number(task.project_id)}
+          taskId={Number(id)}
+          onOpenTasks={() => navigate('/tasks')}
+        />
+      ) : (
         <Card
           title="Danh sách địa điểm"
           extra={
@@ -342,7 +363,7 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={() => setAssignModalVisible(true)}
+              onClick={()=>openAssignmentModal()}
             >
               Phân công
             </Button>
@@ -446,6 +467,9 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
           <Descriptions.Item label="Mã nhiệm vụ">{task.task_code}</Descriptions.Item>
           <Descriptions.Item label="Dự án">{task.project_name}</Descriptions.Item>
           <Descriptions.Item label="Khách hàng">{task.company_name}</Descriptions.Item>
+          {task.production_stage_instance_id&&<Descriptions.Item label="Công đoạn sản xuất">
+            <Space direction="vertical" size={0}><Tag color="purple">{task.stage_sequence_no}. {task.stage_name}</Tag><span style={{color:'#8c8c8c'}}>{task.production_group_name} · {task.production_code}</span></Space>
+          </Descriptions.Item>}
           <Descriptions.Item label="Trạng thái">
             <Tag color={task.is_completed ? 'success' : 'processing'}>{task.status}</Tag>
           </Descriptions.Item>
@@ -463,6 +487,9 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
           </Descriptions.Item>
           <Descriptions.Item label="Thời gian dự kiến">
             {task.estimated_duration ? `${task.estimated_duration} ngày` : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Tổng giờ dự kiến">
+            {Number(task.estimated_hours || 0)} giờ
           </Descriptions.Item>
           <Descriptions.Item label="Địa điểm" span={3}>
             <Space>
@@ -620,10 +647,11 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
 
       {/* Assign Employee Modal */}
       <Modal
-        title="Phân công nhân viên"
+        title={editingAssignment?'Cập nhật lịch phân công':'Phân công nhân viên'}
         open={assignModalVisible}
-        onCancel={() => setAssignModalVisible(false)}
+        onCancel={() => {setAssignModalVisible(false);setEditingAssignment(null);}}
         footer={null}
+        width={880}
       >
         <Form form={assignForm} layout="vertical" onFinish={handleAssignEmployee}>
           <Form.Item
@@ -631,17 +659,12 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
             label="Nhân viên"
             rules={[{ required: true, message: 'Vui lòng chọn nhân viên' }]}
           >
-            <Select
-              placeholder="Chọn nhân viên từ đội ngũ dự án"
-              showSearch
-              optionFilterProp="children"
-            >
-              {projectEmployees.map((emp) => (
-                <Option key={emp.employee_id} value={emp.employee_id}>
-                  {emp.full_name} - {emp.position} ({emp.department})
-                </Option>
-              ))}
-            </Select>
+            <Select placeholder="Chọn nhân viên" showSearch optionFilterProp="label" disabled={Boolean(editingAssignment)}
+              options={[
+                {label:'Nhân sự dự án',options:projectEmployees.filter(emp=>emp.is_project_member).map(emp=>({value:emp.id,label:`${emp.full_name} — ${emp.project_role||emp.position||''}`}))},
+                {label:'Nhân viên khác — sẽ thêm vào dự án',options:projectEmployees.filter(emp=>!emp.is_project_member).map(emp=>({value:emp.id,label:`${emp.full_name} — ${emp.position||emp.department||''}`}))},
+              ]}
+              onChange={employeeId=>{const emp=projectEmployees.find(item=>item.id===employeeId);assignForm.setFieldValue('role_in_task',emp?.project_role||projectRoles.find(role=>role.is_default)?.name||projectRoles[0]?.name);}}/>
           </Form.Item>
 
           <Form.Item
@@ -649,27 +672,12 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
             label="Vai trò"
             rules={[{ required: true, message: 'Vui lòng chọn vai trò' }]}
           >
-            <Select placeholder="Chọn vai trò">
-              <Option value="Trưởng nhóm">Trưởng nhóm</Option>
-              <Option value="Thợ chính">Thợ chính</Option>
-              <Option value="Thợ phụ">Thợ phụ</Option>
-              <Option value="Tài xế">Tài xế</Option>
-              <Option value="Giám sát">Giám sát</Option>
-            </Select>
+            <Select placeholder="Chọn vai trò" options={projectRoles.map(role=>({value:role.name,label:role.name}))}/>
           </Form.Item>
 
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="start_date" label="Ngày bắt đầu">
-                <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="end_date" label="Ngày kết thúc">
-                <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item name="work_dates" label="Đánh dấu ngày làm việc" rules={[{validator:(_,value)=>Array.isArray(value)&&value.length?Promise.resolve():Promise.reject(new Error('Chọn ít nhất một ngày làm việc'))}]}>
+            <AssignmentWorkCalendar compact />
+          </Form.Item>
 
           <Form.Item name="notes" label="Ghi chú">
             <TextArea rows={2} placeholder="Ghi chú về phân công" />
@@ -678,9 +686,9 @@ Chi nhánh Quận 3,456 Lê Văn Sỹ Q3,TP.HCM,Quận 3,Trần Thị B,09123456
           <Form.Item>
             <Space>
               <Button type="primary" htmlType="submit">
-                Phân công
+                {editingAssignment?'Cập nhật lịch':'Phân công'}
               </Button>
-              <Button onClick={() => setAssignModalVisible(false)}>Hủy</Button>
+              <Button onClick={() => {setAssignModalVisible(false);setEditingAssignment(null);}}>Hủy</Button>
             </Space>
           </Form.Item>
         </Form>

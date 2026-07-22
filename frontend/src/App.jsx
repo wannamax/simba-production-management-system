@@ -28,6 +28,9 @@ import DataTransfer from './pages/DataTransfer';
 import Settings from './pages/Settings';
 import MaterialList from './pages/MaterialList';
 import InventoryTransactions from './pages/InventoryTransactions';
+import ShopfloorWorkBoard from './pages/ShopfloorWorkBoard';
+import ShopfloorWorkBoardDisplay from './pages/ShopfloorWorkBoardDisplay';
+import OrderList from './pages/OrderList';
 
 dayjs.locale('vi');
 
@@ -45,6 +48,7 @@ function App() {
     >
       <BrowserRouter>
         <Routes>
+          <Route path="/work-board/display/:token" element={<ShopfloorWorkBoardDisplay />} />
           <Route path="/" element={<MainLayout />}>
             {/* Dashboard */}
             <Route index element={<Dashboard />} />
@@ -52,6 +56,7 @@ function App() {
             {/* Projects */}
             <Route path="projects" element={<ProjectList />} />
             <Route path="projects/:id" element={<ProjectDetail />} />
+            <Route path="orders" element={<OrderList />} />
             
             {/* Tasks */}
             <Route path="tasks" element={<TaskList />} />
@@ -76,6 +81,7 @@ function App() {
             <Route path="reports/monthly" element={<ReportMonthly />} />
             <Route path="materials" element={<MaterialList />} />
             <Route path="inventory" element={<InventoryTransactions />} />
+            <Route path="work-board" element={<ShopfloorWorkBoard />} />
             <Route path="data-transfer" element={<DataTransfer />} />
             <Route path="settings" element={<Settings />} />
             

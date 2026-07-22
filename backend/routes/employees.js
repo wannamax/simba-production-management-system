@@ -17,6 +17,17 @@ async function ensureActiveCatalog(catalogType, name) {
   }
 }
 
+async function validateAdministrativeAddress(provinceCode, communeCode) {
+  if (!provinceCode && !communeCode) return;
+  if (!provinceCode) throw Object.assign(new Error('Cần chọn Tỉnh/Thành trước Phường/Xã'), { status: 400 });
+  const province = await pool.query('SELECT 1 FROM administrative_provinces WHERE code=$1 AND is_active=true', [provinceCode]);
+  if (!province.rowCount) throw Object.assign(new Error('Tỉnh/Thành không hợp lệ hoặc đã ngừng sử dụng'), { status: 400 });
+  if (communeCode) {
+    const commune = await pool.query('SELECT 1 FROM administrative_communes WHERE code=$1 AND province_code=$2 AND is_active=true', [communeCode, provinceCode]);
+    if (!commune.rowCount) throw Object.assign(new Error('Phường/Xã không thuộc Tỉnh/Thành đã chọn'), { status: 400 });
+  }
+}
+
 const validateEmployee = [
   body('full_name').notEmpty().withMessage('Họ tên không được trống'),
   body('position').notEmpty().withMessage('Vị trí không được trống'),
@@ -28,36 +39,39 @@ router.get('/', async (req, res, next) => {
   try {
     const { department, status = 'Hoạt động', search, position } = req.query;
     
-    let query = 'SELECT * FROM employees WHERE 1=1';
+    let query = `SELECT e.*,p.name province_name,p.unit_type province_type,
+      a.name commune_name,a.unit_type commune_type FROM employees e
+      LEFT JOIN administrative_provinces p ON p.code=e.province_code
+      LEFT JOIN administrative_communes a ON a.code=e.commune_code WHERE 1=1`;
     const params = [];
     let paramIndex = 1;
     
     // Only add status filter if it's a valid status value
     if (status && status !== 'all' && status !== 'availability') {
-      query += ` AND status = $${paramIndex}`;
+      query += ` AND e.status = $${paramIndex}`;
       params.push(status);
       paramIndex++;
     }
     
     if (department && department !== 'all') {
-      query += ` AND department = $${paramIndex}`;
+      query += ` AND e.department = $${paramIndex}`;
       params.push(department);
       paramIndex++;
     }
 
     if (position && position !== 'all') {
-      query += ` AND position = $${paramIndex}`;
+      query += ` AND e.position = $${paramIndex}`;
       params.push(position);
       paramIndex++;
     }
     
     if (search) {
-      query += ` AND (full_name ILIKE $${paramIndex} OR employee_code ILIKE $${paramIndex} OR phone ILIKE $${paramIndex})`;
+      query += ` AND (e.full_name ILIKE $${paramIndex} OR e.employee_code ILIKE $${paramIndex} OR e.phone ILIKE $${paramIndex})`;
       params.push(`%${search}%`);
       paramIndex++;
     }
     
-    query += ' ORDER BY full_name';
+    query += ' ORDER BY e.full_name';
     
     const result = await pool.query(query, params);
     
@@ -118,8 +132,8 @@ router.get('/availability', async (req, res, next) => {
           t.id AS task_id,
           t.task_name,
           t.task_type,
-          t.start_date,
-          t.end_date,
+          COALESCE(day_plan.start_date, ta.start_date, t.start_date) AS start_date,
+          COALESCE(day_plan.end_date, ta.end_date, t.end_date) AS end_date,
           t.status AS task_status,
           p.id AS project_id,
           p.project_name,
@@ -129,6 +143,7 @@ router.get('/availability', async (req, res, next) => {
           p.end_date AS project_end_date,
           COALESCE(pa.role, ta.role_in_task, 'Thành viên') AS role,
           CASE
+            WHEN COALESCE(day_plan.planned_days, 0) > 0 THEN day_plan.planned_hours
             WHEN COALESCE(ta.total_hours, 0) > 0 THEN ta.total_hours
             WHEN COALESCE(t.estimated_hours, 0) > 0 THEN
               t.estimated_hours / GREATEST((
@@ -143,13 +158,24 @@ router.get('/availability', async (req, res, next) => {
         JOIN projects p ON p.id = t.project_id
         LEFT JOIN project_assignments pa
           ON pa.project_id = p.id AND pa.employee_id = ta.employee_id
+        LEFT JOIN LATERAL (
+          SELECT MIN(day.work_date) start_date,MAX(day.work_date) end_date,
+            COUNT(*)::int planned_days,COALESCE(SUM(day.planned_hours),0)::numeric planned_hours
+          FROM task_assignment_work_days day
+          WHERE day.task_assignment_id=ta.id AND day.work_date BETWEEN $1::date AND $2::date
+        ) day_plan ON true
         WHERE ta.is_active = TRUE
           AND COALESCE(t.is_archived, FALSE) = FALSE
           AND t.status NOT IN ('Tạm dừng', 'Hủy', 'Hoàn thành', 'Lưu trữ')
           AND p.deleted_at IS NULL
           AND p.status NOT IN ('Hoàn thành', 'Hủy', 'Lưu trữ')
-          AND COALESCE(ta.start_date, t.start_date, p.start_date, $1::date) <= $2::date
-          AND COALESCE(ta.end_date, t.end_date, p.end_date, $2::date) >= $1::date
+          AND (
+            COALESCE(day_plan.planned_days,0) > 0 OR (
+              NOT EXISTS (SELECT 1 FROM task_assignment_work_days any_day WHERE any_day.task_assignment_id=ta.id)
+              AND COALESCE(ta.start_date, t.start_date, p.start_date, $1::date) <= $2::date
+              AND COALESCE(ta.end_date, t.end_date, p.end_date, $2::date) >= $1::date
+            )
+          )
           AND ($4::int[] IS NULL OR p.id = ANY($4::int[]))
       ),
       employee_totals AS (
@@ -282,7 +308,10 @@ router.get('/:id', async (req, res, next) => {
       });
     }
 
-    const result = await pool.query('SELECT * FROM employees WHERE id = $1', [employeeId]);
+    const result = await pool.query(`SELECT e.*,p.name province_name,p.unit_type province_type,
+      a.name commune_name,a.unit_type commune_type FROM employees e
+      LEFT JOIN administrative_provinces p ON p.code=e.province_code
+      LEFT JOIN administrative_communes a ON a.code=e.commune_code WHERE e.id=$1`, [employeeId]);
     
     if (result.rows.length === 0) {
       return res.status(404).json({ 
@@ -344,6 +373,7 @@ router.post('/', validateEmployee, async (req, res, next) => {
     });
   }
   
+  let client;
   try {
     const { 
       full_name, 
@@ -354,33 +384,42 @@ router.post('/', validateEmployee, async (req, res, next) => {
       salary,
       hire_date,
       address,
+      province_code,
+      commune_code,
       id_number,
       notes
     } = req.body;
     
     await ensureActiveCatalog('EMPLOYEE_POSITION', position);
     await ensureActiveCatalog('DEPARTMENT', department);
-    const employeeCode = await CodeGenerator.generateEmployeeCode();
-    
-    const result = await pool.query(
+    await validateAdministrativeAddress(province_code, commune_code);
+    client = await pool.connect();
+    await client.query('BEGIN');
+    const employeeCode = await CodeGenerator.generateEmployeeCode(client);
+
+    const result = await client.query(
       `INSERT INTO employees (
         employee_code, full_name, phone, email, position, 
-        department, salary, hire_date, address, id_number, notes
+        department,salary,hire_date,address,province_code,commune_code,id_number,notes
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [
         employeeCode, full_name, phone, email, position,
-        department, salary, hire_date, address, id_number, notes
+        department,salary,hire_date,address,province_code || null,commune_code || null,id_number,notes
       ]
     );
-    
+    await client.query('COMMIT');
+
     res.status(201).json({
       success: true,
       message: 'Tạo nhân viên thành công',
       data: result.rows[0]
     });
   } catch (error) {
+    if (client) await client.query('ROLLBACK');
     next(error);
+  } finally {
+    if (client) client.release();
   }
 });
 
@@ -413,12 +452,15 @@ router.put('/:id', validateEmployee, async (req, res, next) => {
       hire_date,
       status,
       address,
+      province_code,
+      commune_code,
       id_number,
       notes
     } = req.body;
     
     await ensureActiveCatalog('EMPLOYEE_POSITION', position);
     await ensureActiveCatalog('DEPARTMENT', department);
+    await validateAdministrativeAddress(province_code, commune_code);
     const result = await pool.query(
       `UPDATE employees SET 
         full_name = $1,
@@ -430,11 +472,13 @@ router.put('/:id', validateEmployee, async (req, res, next) => {
         hire_date = $7,
         status = $8,
         address = $9,
-        id_number = $10,
-        notes = $11,
+        province_code=$10,
+        commune_code=$11,
+        id_number=$12,
+        notes=$13,
         updated_at = NOW()
-      WHERE id = $12 RETURNING *`,
-      [full_name, phone, email, position, department, salary, hire_date, status, address, id_number, notes, employeeId]
+      WHERE id=$14 RETURNING *`,
+      [full_name,phone,email,position,department,salary,hire_date,status,address,province_code || null,commune_code || null,id_number,notes,employeeId]
     );
     
     if (result.rows.length === 0) {

@@ -88,6 +88,61 @@ code {
   color: rgba(0, 0, 0, 0.85);
 }
 
+.assignment-work-calendar {
+  padding: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.assignment-calendar-months {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.assignment-calendar-month {
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+}
+
+.assignment-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(28px, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.assignment-calendar-grid.weekday-header span {
+  color: #64748b;
+  font-size: 11px;
+  text-align: center;
+}
+
+.assignment-calendar-day {
+  min-height: 32px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+  background: white;
+  color: #334155;
+  cursor: pointer;
+}
+
+.assignment-calendar-day.weekend { color: #d46b08; }
+.assignment-calendar-day.selected {
+  border-color: #1677ff;
+  background: #1677ff;
+  color: white;
+  font-weight: 600;
+}
+.assignment-calendar-empty { min-height: 32px; }
+
+.assignment-work-calendar.compact .assignment-calendar-months {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
 /* Stat Card */
 .stat-card {
   background: white;
@@ -173,4 +228,8 @@ code {
 
 .ant-btn {
   border-radius: 6px;
+}
+
+.shopfloor-absence-row > td {
+  background: #fff1f0 !important;
 }

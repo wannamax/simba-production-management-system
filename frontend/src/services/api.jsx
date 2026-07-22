@@ -56,6 +56,8 @@ export const projectAPI = {
   updateStatus: (id, status) => api.patch(`/projects/${id}/status`, { status }),
   delete: (id) => api.delete(`/projects/${id}`),
   addProduct: (id, data) => api.post(`/projects/${id}/products`, data),
+  updateProduct: (projectId, productId, data) => api.put(`/projects/${projectId}/products/${productId}`, data),
+  removeProduct: (projectId, productId) => api.delete(`/projects/${projectId}/products/${productId}`),
   getStatistics: (id) => api.get(`/projects/${id}/statistics`),
   
   // Employee assignments
@@ -63,6 +65,35 @@ export const projectAPI = {
   updateAssignment: (projectId, assignmentId, data) => api.put(`/projects/${projectId}/assignments/${assignmentId}`, data),
   removeAssignment: (projectId, assignmentId) => api.delete(`/projects/${projectId}/assignments/${assignmentId}`),
   getAssignments: (projectId) => api.get(`/projects/${projectId}/assignments`),
+};
+
+// ==================== PROJECT CLOSEOUT ====================
+export const projectCloseoutAPI = {
+  get: (projectId) => api.get(`/project-closeout/projects/${projectId}`),
+  updateChecklist: (id, data) => api.put(`/project-closeout/checklist/${id}`, data),
+  close: (projectId, data) => api.post(`/project-closeout/projects/${projectId}/close`, data),
+  exportExcel: (projectId) => api.get(`/project-closeout/projects/${projectId}/export.xlsx`, { responseType: 'blob' }),
+  exportPdf: (projectId) => api.get(`/project-closeout/projects/${projectId}/export.pdf`, { responseType: 'blob' }),
+};
+
+// ==================== DAILY SHOPFLOOR WORK BOARD ====================
+export const shopfloorWorkBoardAPI = {
+  getMeta: () => api.get('/shopfloor-work-board/meta'),
+  getBoards: (params) => api.get('/shopfloor-work-board/boards', { params }),
+  openDay: data => api.post('/shopfloor-work-board/daily/open', data),
+  getBoard: id => api.get(`/shopfloor-work-board/boards/${id}`),
+  createBoard: data => api.post('/shopfloor-work-board/boards', data),
+  updateBoard: (id, data) => api.put(`/shopfloor-work-board/boards/${id}`, data),
+  syncTasks: id => api.post(`/shopfloor-work-board/boards/${id}/sync-tasks`),
+  addItem: (boardId, data) => api.post(`/shopfloor-work-board/boards/${boardId}/items`, data),
+  updateItem: (id, data) => api.put(`/shopfloor-work-board/items/${id}`, data),
+  deleteItem: id => api.delete(`/shopfloor-work-board/items/${id}`),
+  publish: id => api.post(`/shopfloor-work-board/boards/${id}/publish`),
+  closeDay: (id, data) => api.post(`/shopfloor-work-board/boards/${id}/close-day`, data),
+  lock: id => api.post(`/shopfloor-work-board/boards/${id}/lock`),
+  getPublic: token => api.get(`/shopfloor-work-board/public/${token}`),
+  getProjectLogs: params => api.get('/shopfloor-work-board/project-logs', { params }),
+  getDailyLog: id => api.get(`/shopfloor-work-board/daily-logs/${id}`),
 };
 
 // ==================== CUSTOMERS ====================
@@ -103,6 +134,7 @@ export const taskAPI = {
   getAll: (params) => api.get('/tasks', { params }),
   getById: (id) => api.get(`/tasks/${id}`),
   create: (data) => api.post('/tasks', data),
+  createBatch: (data) => api.post('/tasks/batch', data),
   update: (id, data) => api.put(`/tasks/${id}`, data),
   delete: (id) => api.delete(`/tasks/${id}`),
   complete: (id) => api.patch(`/tasks/${id}/complete`),
@@ -124,6 +156,84 @@ export const taskAPI = {
   // Notifications
   getUnreadNotifications: () => api.get('/tasks/notifications/unread'),
   markNotificationRead: (id) => api.patch(`/tasks/notifications/${id}/read`),
+};
+
+// ==================== DELIVERY & INSTALLATION EXECUTION ====================
+export const taskExecutionAPI = {
+  getProject: projectId => api.get(`/task-execution/projects/${projectId}`),
+  getTask: taskId => api.get(`/task-execution/tasks/${taskId}`),
+  createLocation: (taskId, data) => api.post(`/task-execution/tasks/${taskId}/locations`, data),
+  updateLocation: (taskId, locationId, data) => api.put(`/task-execution/tasks/${taskId}/locations/${locationId}`, data),
+  updateLocationStatus: (taskId, locationId, data) => api.patch(`/task-execution/tasks/${taskId}/locations/${locationId}/status`, data),
+  deleteLocation: (taskId, locationId) => api.delete(`/task-execution/tasks/${taskId}/locations/${locationId}`),
+  downloadTemplate: taskId => api.get(`/task-execution/tasks/${taskId}/template.xlsx`, { responseType: 'blob' }),
+  exportExcel: taskId => api.get(`/task-execution/tasks/${taskId}/export.xlsx`, { responseType: 'blob' }),
+  previewImport: (taskId, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post(`/task-execution/tasks/${taskId}/import-preview`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    });
+  },
+  applyImport: batchId => api.post(`/task-execution/imports/${batchId}/apply`),
+};
+
+// ==================== ORDERS & PRODUCTION WORKFLOW ====================
+export const orderAPI = {
+  getMeta: () => api.get('/orders/meta'),
+  getAll: params => api.get('/orders', { params }),
+  getById: id => api.get(`/orders/${id}`),
+  create: data => api.post('/orders', data),
+  update: (id, data) => api.put(`/orders/${id}`, data),
+  addItem: (id, data) => api.post(`/orders/${id}/items`, data),
+  updateItemQuantity: (id, itemId, data) => api.patch(`/orders/${id}/items/${itemId}/quantity`, data),
+  confirm: id => api.post(`/orders/${id}/confirm`),
+  cancel: (id, reason) => api.post(`/orders/${id}/cancel`, { reason }),
+  delete: id => api.delete(`/orders/${id}`),
+};
+
+export const productionWorkflowAPI = {
+  getMeta: () => api.get('/production-workflows/meta'),
+  getProcesses: params => api.get('/production-workflows/processes', { params }),
+  getProcess: id => api.get(`/production-workflows/processes/${id}`),
+  createProcess: data => api.post('/production-workflows/processes', data),
+  updateProcess: (id, data) => api.put(`/production-workflows/processes/${id}`, data),
+  deleteProcess: id => api.delete(`/production-workflows/processes/${id}`),
+  getContext: orderId => api.get(`/production-workflows/context/${orderId}`),
+  createOrder: data => api.post('/production-workflows/orders', data),
+  getOrders: params => api.get('/production-workflows/orders', { params }),
+  getOrder: id => api.get(`/production-workflows/orders/${id}`),
+  recordOutput: (stageItemId, data) => api.post(`/production-workflows/stage-items/${stageItemId}/output`, data),
+  updateStatus: (id, status) => api.patch(`/production-workflows/orders/${id}/status`, { status }),
+};
+
+export const productionPlanAPI = {
+  getAll: params => api.get('/production-plans', { params }),
+  getById: id => api.get(`/production-plans/${id}`),
+  create: data => api.post('/production-plans', data),
+  updateStage: (id, data) => api.patch(`/production-plans/stages/${id}`, data),
+  updateGroup: (id, data) => api.patch(`/production-plans/groups/${id}`, data),
+  cancelGroup: (id, reason) => api.delete(`/production-plans/groups/${id}`, { data: { reason } }),
+  cancel: (id, reason) => api.delete(`/production-plans/${id}`, { data: { reason } }),
+};
+
+// ==================== WORK GROUPS & WORK CATALOG ====================
+export const workCatalogAPI = {
+  getProjectTypes: () => api.get('/work-catalog/project-types'),
+  getGroups: (params) => api.get('/work-catalog/groups', { params }),
+  createGroup: data => api.post('/work-catalog/groups', data),
+  updateGroup: (id, data) => api.put(`/work-catalog/groups/${id}`, data),
+  deleteGroup: id => api.delete(`/work-catalog/groups/${id}`),
+  getItems: params => api.get('/work-catalog/items', { params }),
+  createItem: data => api.post('/work-catalog/items', data),
+  updateItem: (id, data) => api.put(`/work-catalog/items/${id}`, data),
+  deleteItem: id => api.delete(`/work-catalog/items/${id}`),
+  getRoles: params => api.get('/work-catalog/roles', { params }),
+  createRole: data => api.post('/work-catalog/roles', data),
+  updateRole: (id, data) => api.put(`/work-catalog/roles/${id}`, data),
+  deleteRole: id => api.delete(`/work-catalog/roles/${id}`),
+  getProjectContext: projectId => api.get(`/work-catalog/project-context/${projectId}`),
 };
 
 // ==================== NOTIFICATIONS ====================

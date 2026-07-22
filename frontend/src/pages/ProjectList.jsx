@@ -38,6 +38,7 @@ import {
   PRIORITY_COLORS,
   formatCurrency
 } from '../utils/constants';
+import { workCatalogAPI } from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -50,6 +51,8 @@ const ProjectList = () => {
   const [projects, setProjects] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [projectTypes, setProjectTypes] = useState(PROJECT_TYPES);
+  const [projectRoles, setProjectRoles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -75,6 +78,15 @@ const ProjectList = () => {
     loadProjects();
     loadCustomers();
   }, [filters, pagination.current]);
+
+  useEffect(() => {
+    Promise.all([workCatalogAPI.getProjectTypes(),workCatalogAPI.getRoles()])
+      .then(([types,roles]) => {
+        setProjectTypes((types.data || []).map(item => item.name));
+        setProjectRoles(roles.data || []);
+      })
+      .catch(error => console.warn('Không thể tải Loại dự án từ Settings:', error.message));
+  }, []);
 
   const loadProjects = async () => {
     setLoading(true);
@@ -139,13 +151,8 @@ const ProjectList = () => {
   const handleEdit = async (record) => {
     setEditingProject(record);
     setModalVisible(true);
-    
-    // Load employees if not loaded
-    if (employees.length === 0) {
-      loadEmployees();
-    }
-    
-    // Load assigned employees for this project
+    setSelectedEmployees([]);
+    setEmployeeAssignments({});
     try {
       const response = await axios.get(`${API_URL}/projects/${record.id}`);
       const projectData = response.data.data;
@@ -156,22 +163,6 @@ const ProjectList = () => {
         end_date: projectData.end_date ? dayjs(projectData.end_date) : null,
       });
       
-      // Set selected employees
-      if (projectData.employees && projectData.employees.length > 0) {
-        const employeeIds = projectData.employees.map(emp => emp.employee_id || emp.id);
-        setSelectedEmployees(employeeIds);
-        
-        // Set employee roles
-        const assignments = {};
-        projectData.employees.forEach(emp => {
-          const empId = emp.employee_id || emp.id;
-          assignments[empId] = emp.role || 'Thành viên';
-        });
-        setEmployeeAssignments(assignments);
-      } else {
-        setSelectedEmployees([]);
-        setEmployeeAssignments({});
-      }
     } catch (error) {
       message.error('Không thể tải thông tin dự án');
       console.error('Load project error:', error);
@@ -208,12 +199,9 @@ const ProjectList = () => {
         message.success('Tạo dự án thành công');
       }
 
-      // Update employee assignments
-      if (selectedEmployees.length > 0) {
+      // Nhân sự chỉ setup khi tạo mới; sau đó quản lý tại trang Xem dự án.
+      if (!editingProject && selectedEmployees.length > 0) {
         await updateEmployeeAssignments(projectId);
-      } else if (editingProject) {
-        // Remove all assignments if no employees selected
-        await removeAllAssignments(projectId);
       }
 
       setModalVisible(false);
@@ -510,7 +498,7 @@ const ProjectList = () => {
               setPagination({ ...pagination, current: 1 });
             }}
           >
-            {PROJECT_TYPES.map((type) => (
+            {projectTypes.map((type) => (
               <Option key={type} value={type}>
                 {type}
               </Option>
@@ -593,7 +581,7 @@ const ProjectList = () => {
                 ]}
               >
                 <Select placeholder="Chọn loại dự án">
-                  {PROJECT_TYPES.map((type) => (
+                  {projectTypes.map((type) => (
                     <Option key={type} value={type}>
                       {type}
                     </Option>
@@ -671,9 +659,10 @@ const ProjectList = () => {
             <Input.TextArea rows={4} placeholder="Nhập mô tả dự án" />
           </Form.Item>
 
-          <Divider orientation="left">
-            <TeamOutlined /> Phân công nhân sự ({selectedEmployees.length} người)
-          </Divider>
+          {!editingProject && <>
+            <Divider orientation="left">
+              <TeamOutlined /> Phân công nhân sự ban đầu ({selectedEmployees.length} người)
+            </Divider>
 
           {employeesLoading ? (
             <div style={{ textAlign: 'center', padding: '40px 0' }}>
@@ -728,13 +717,7 @@ const ProjectList = () => {
                             onChange={(value) => handleRoleChange(empId, value)}
                             placeholder="Chọn vai trò"
                           >
-                            <Option value="Quản lý dự án">Quản lý dự án</Option>
-                            <Option value="Trưởng nhóm sản xuất">Trưởng nhóm sản xuất</Option>
-                            <Option value="Trưởng nhóm lắp đặt">Trưởng nhóm lắp đặt</Option>
-                            <Option value="Thiết kế">Thiết kế</Option>
-                            <Option value="Thợ sản xuất">Thợ sản xuất</Option>
-                            <Option value="Thợ lắp đặt">Thợ lắp đặt</Option>
-                            <Option value="Thành viên">Thành viên</Option>
+                            {projectRoles.map(role=><Option key={role.id} value={role.name}>{role.name}</Option>)}
                           </Select>
                         </Col>
                       </Row>
@@ -744,6 +727,7 @@ const ProjectList = () => {
               )}
             </>
           )}
+          </>}
 
           <Divider />
 

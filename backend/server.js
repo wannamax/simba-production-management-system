@@ -23,6 +23,13 @@ const materialsRouter = require('./routes/materials');
 const materialAdminRouter = require('./routes/material-admin');
 const materialPlanningRouter = require('./routes/material-planning');
 const inventoryRouter = require('./routes/inventory');
+const projectCloseoutRouter = require('./routes/project-closeout');
+const shopfloorWorkBoardRouter = require('./routes/shopfloor-work-board');
+const workCatalogRouter = require('./routes/work-catalog');
+const taskExecutionRouter = require('./routes/task-execution');
+const ordersRouter = require('./routes/orders');
+const productionWorkflowsRouter = require('./routes/production-workflows');
+const productionPlansRouter = require('./routes/production-plans');
 const appVersion = require('./config/version');
 
 const app = express();
@@ -85,6 +92,13 @@ app.use('/api/materials', materialsRouter);
 app.use('/api/material-admin', materialAdminRouter);
 app.use('/api/material-planning', materialPlanningRouter);
 app.use('/api/inventory', inventoryRouter);
+app.use('/api/project-closeout', projectCloseoutRouter);
+app.use('/api/shopfloor-work-board', shopfloorWorkBoardRouter);
+app.use('/api/work-catalog', workCatalogRouter);
+app.use('/api/task-execution', taskExecutionRouter);
+app.use('/api/orders', ordersRouter);
+app.use('/api/production-workflows', productionWorkflowsRouter);
+app.use('/api/production-plans', productionPlansRouter);
 
 app.use((req, res) => {
   res.status(404).json({
@@ -101,7 +115,7 @@ const server = app.listen(PORT, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
 ║                                                        ║
-║   🚀 Simba PMS API — Version 2.4.0-D                  ║
+║   🚀 Simba PMS API — Version 2.6.0-I                  ║
 ║                                                        ║
 ║   Port: ${PORT}                                           ║
 ║   Environment: ${process.env.NODE_ENV || 'development'}                              ║

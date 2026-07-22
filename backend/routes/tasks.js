@@ -19,8 +19,8 @@ const upload = multer({
 });
 
 
-async function ensureActiveCatalog(catalogType, name) {
-  const result = await pool.query(
+async function ensureActiveCatalog(catalogType, name, db = pool) {
+  const result = await db.query(
     'SELECT 1 FROM system_catalogs WHERE catalog_type=$1 AND name=$2 AND is_active=true',
     [catalogType, name]
   );
@@ -33,9 +33,237 @@ async function ensureActiveCatalog(catalogType, name) {
 
 const validateTask = [
   body('project_id').isInt().withMessage('Dự án không hợp lệ'),
-  body('task_type').notEmpty().withMessage('Loại nhiệm vụ không được trống'),
-  body('task_name').notEmpty().withMessage('Tên nhiệm vụ không được trống'),
 ];
+
+async function resolveTaskDefinition(db, projectId, workItemId, taskType, taskName) {
+  const project = await db.query('SELECT id,project_type FROM projects WHERE id=$1 AND deleted_at IS NULL', [projectId]);
+  if (!project.rowCount) throw Object.assign(new Error('Dự án không tồn tại hoặc đã bị xóa'), { status: 400 });
+  if (workItemId) {
+    const item = await db.query(
+      `SELECT wi.id,wi.name,wi.execution_type,g.name group_name
+       FROM work_items wi JOIN work_groups g ON g.id=wi.group_id
+       WHERE wi.id=$1 AND wi.is_active=true AND g.is_active=true
+         AND (
+           NOT EXISTS(SELECT 1 FROM work_item_project_types all_types WHERE all_types.work_item_id=wi.id)
+           OR EXISTS(SELECT 1 FROM work_item_project_types matching_type
+             WHERE matching_type.work_item_id=wi.id AND matching_type.project_type=$2)
+         )`,
+      [workItemId, project.rows[0].project_type]
+    );
+    if (!item.rowCount) throw Object.assign(new Error('Công việc không phù hợp với Loại dự án đã chọn'), { status: 400 });
+    return {
+      workItemId: item.rows[0].id,
+      taskType: item.rows[0].group_name,
+      taskName: item.rows[0].name,
+      defaultEstimatedHours: null,
+      executionType: item.rows[0].execution_type,
+    };
+  }
+  if (!taskType || !taskName) throw Object.assign(new Error('Cần chọn Công việc cho nhiệm vụ'), { status: 400 });
+  await ensureActiveCatalog('TASK_TYPE', taskType, db);
+  const normalized=`${taskType} ${taskName}`.toLowerCase();
+  return { workItemId: null, taskType, taskName, defaultEstimatedHours: null,
+    executionType:normalized.includes('giao hàng')?'DELIVERY':normalized.includes('lắp đặt')?'INSTALLATION':null };
+}
+
+function validateDateRange(startDate, endDate, label = 'Thời gian') {
+  if (startDate && endDate && startDate > endDate) {
+    throw Object.assign(new Error(`${label}: ngày bắt đầu không được sau ngày kết thúc`), { status: 400 });
+  }
+}
+
+const DAILY_PLANNED_HOURS = 8;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function toISODate(value) {
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return value ? String(value).slice(0, 10) : null;
+}
+
+function enumerateDates(startDate, endDate) {
+  if (!startDate || !endDate) return [];
+  const normalizedStart = toISODate(startDate);
+  const normalizedEnd = toISODate(endDate);
+  validateDateRange(normalizedStart, normalizedEnd, 'Lịch phân công');
+  const dates = [];
+  const cursor = new Date(`${normalizedStart}T00:00:00Z`);
+  const last = new Date(`${normalizedEnd}T00:00:00Z`);
+  while (cursor <= last) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function normalizeAssignmentSchedule(row, task = {}) {
+  const suppliedDates = Array.isArray(row?.work_dates) ? row.work_dates : null;
+  const dates = suppliedDates === null
+    ? enumerateDates(row?.start_date || task.start_date, row?.end_date || task.end_date)
+    : suppliedDates;
+  const workDates = [...new Set(dates.map(toISODate))].sort();
+  if (!workDates.length || workDates.some(value => !ISO_DATE_PATTERN.test(value))) {
+    throw Object.assign(new Error('Cần chọn ít nhất một ngày làm việc hợp lệ trên lịch phân công'), { status:400 });
+  }
+  return {
+    workDates,
+    startDate: workDates[0],
+    endDate: workDates[workDates.length - 1],
+    plannedHours: workDates.length * DAILY_PLANNED_HOURS,
+  };
+}
+
+async function replaceAssignmentWorkDays(db, assignmentId, workDates) {
+  await db.query('DELETE FROM task_assignment_work_days WHERE task_assignment_id=$1', [assignmentId]);
+  await db.query(
+    `INSERT INTO task_assignment_work_days(task_assignment_id,work_date,planned_hours)
+     SELECT $1,day::date,$3 FROM unnest($2::text[]) day`,
+    [assignmentId,workDates,DAILY_PLANNED_HOURS]
+  );
+}
+
+async function refreshTaskPlan(db, taskId) {
+  await db.query('SELECT refresh_task_assignment_plan($1)', [taskId]);
+  const refreshed = await db.query('SELECT * FROM tasks WHERE id=$1', [taskId]);
+  return refreshed.rows[0];
+}
+
+async function validateProductionStage(db,projectId,stageId){
+  if(!stageId)return null;
+  const result=await db.query(`SELECT stage.*,production.production_code,production.group_name,production.status production_status,
+    plan.status plan_status FROM production_stage_instances stage
+    JOIN production_orders production ON production.id=stage.production_order_id
+    LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
+    WHERE stage.id=$1 AND production.project_id=$2`,[stageId,projectId]);
+  if(!result.rowCount)throw Object.assign(new Error('Công đoạn không thuộc Dự án đã chọn'),{status:400});
+  if(result.rows[0].production_status==='CANCELLED'||result.rows[0].plan_status==='CANCELLED')throw Object.assign(new Error('Không thể gán Công việc vào Công đoạn đã hủy'),{status:409});
+  if(result.rows[0].production_status==='COMPLETED')throw Object.assign(new Error('Không thể gán Công việc vào Nhóm sản xuất đã hoàn tất'),{status:409});
+  return result.rows[0];
+}
+
+async function refreshProductionStageFromWorks(db,stageId){
+  if(!stageId)return;
+  const summary=await db.query(`SELECT stage.id,stage.production_order_id,stage.tracks_quantity,
+    COUNT(work.id) FILTER(WHERE work.deleted_at IS NULL)::int work_count,
+    COUNT(work.id) FILTER(WHERE work.deleted_at IS NULL AND work.is_completed=true)::int completed_work_count,
+    COUNT(work.id) FILTER(WHERE work.deleted_at IS NULL AND work.status NOT IN ('Chưa bắt đầu','Chờ xử lý'))::int started_work_count,
+    NOT EXISTS(SELECT 1 FROM production_stage_items item WHERE item.stage_instance_id=stage.id AND item.good_quantity<item.planned_quantity) quantity_complete
+    FROM production_stage_instances stage LEFT JOIN tasks work ON work.production_stage_instance_id=stage.id
+    WHERE stage.id=$1 GROUP BY stage.id`,[stageId]);
+  if(!summary.rowCount)return;
+  const row=summary.rows[0];
+  const completed=row.work_count>0&&row.completed_work_count===row.work_count&&(!row.tracks_quantity||row.quantity_complete);
+  const status=completed?'COMPLETED':row.started_work_count>0?'IN_PROGRESS':'PLANNED';
+  await db.query(`UPDATE production_stage_instances SET status=$1 WHERE id=$2`,[status,stageId]);
+  const required=await db.query(`SELECT COUNT(*) FILTER(WHERE is_required)::int total,
+    COUNT(*) FILTER(WHERE is_required AND status='COMPLETED')::int completed,
+    COUNT(*) FILTER(WHERE status='IN_PROGRESS')::int in_progress FROM production_stage_instances WHERE production_order_id=$1`,[row.production_order_id]);
+  const productionStatus=required.rows[0].total>0&&required.rows[0].total===required.rows[0].completed?'READY_FOR_DELIVERY':required.rows[0].in_progress>0?'IN_PROGRESS':'PLANNED';
+  await db.query(`UPDATE production_orders SET status=$1 WHERE id=$2 AND status NOT IN ('COMPLETED','CANCELLED')`,[productionStatus,row.production_order_id]);
+  await db.query(`UPDATE production_plans plan SET status=CASE
+    WHEN NOT EXISTS(SELECT 1 FROM production_orders child WHERE child.production_plan_id=plan.id AND child.status NOT IN ('READY_FOR_DELIVERY','COMPLETED','CANCELLED')) THEN 'READY_FOR_DELIVERY'
+    WHEN EXISTS(SELECT 1 FROM production_orders child WHERE child.production_plan_id=plan.id AND child.status='IN_PROGRESS') THEN 'IN_PROGRESS'
+    ELSE 'PLANNED' END
+    WHERE plan.id=(SELECT production_plan_id FROM production_orders WHERE id=$1) AND plan.status NOT IN ('COMPLETED','CANCELLED')`,[row.production_order_id]);
+}
+
+async function saveInitialAssignments(db, task, assignments, userId) {
+  const rows = Array.isArray(assignments) ? assignments : [];
+  const employeeIds = rows.map(row => Number(row.employee_id));
+  if (employeeIds.some(id => !Number.isInteger(id)) || new Set(employeeIds).size !== employeeIds.length) {
+    throw Object.assign(new Error('Danh sách nhân viên phân công không hợp lệ hoặc bị trùng'), { status: 400 });
+  }
+  if (!employeeIds.length) return { warnings:[], syncedEmployees:[] };
+  const activeEmployees = await db.query(
+    `SELECT id,full_name FROM employees WHERE id=ANY($1::int[]) AND status='Hoạt động'`,
+    [employeeIds]
+  );
+  if (activeEmployees.rowCount !== employeeIds.length) {
+    throw Object.assign(new Error('Danh sách có nhân viên không tồn tại hoặc đã ngừng hoạt động'), { status:400 });
+  }
+  const current = await db.query(
+    `SELECT DISTINCT ON(employee_id) employee_id,role FROM project_assignments
+     WHERE project_id=$1 AND employee_id=ANY($2::int[]) ORDER BY employee_id,id`,
+    [task.project_id,employeeIds]
+  );
+  const projectRoles = new Map(current.rows.map(item => [Number(item.employee_id),item.role]));
+  const defaultRole = await db.query(
+    `SELECT name FROM system_catalogs WHERE catalog_type='PROJECT_ROLE' AND is_active=true
+     ORDER BY is_default DESC,sort_order,name LIMIT 1`
+  );
+  if (!defaultRole.rowCount) throw Object.assign(new Error('Chưa có Danh mục vai trò đang hoạt động'), { status:400 });
+
+  const warnings = [];
+  const syncedEmployees = [];
+  for (const row of rows) {
+    const employeeId = Number(row.employee_id);
+    const projectRole = row.project_role || row.role_in_task || defaultRole.rows[0].name;
+    if (!projectRoles.has(employeeId)) {
+      await ensureActiveCatalog('PROJECT_ROLE', projectRole, db);
+      await db.query(
+        `INSERT INTO project_assignments(project_id,employee_id,role,notes)
+         VALUES($1,$2,$3,$4)`,
+        [task.project_id,employeeId,projectRole,'Tự động thêm khi phân công Task']
+      );
+      projectRoles.set(employeeId,projectRole);
+      syncedEmployees.push(activeEmployees.rows.find(item => Number(item.id) === employeeId)?.full_name || String(employeeId));
+    }
+    const taskRole = row.role_in_task || projectRoles.get(employeeId) || projectRole;
+    await ensureActiveCatalog('PROJECT_ROLE', taskRole, db);
+    const schedule = normalizeAssignmentSchedule(row, task);
+    const assignment = await db.query(
+      `INSERT INTO task_assignments(task_id,employee_id,role_in_task,start_date,end_date,notes,assigned_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [task.id,employeeId,taskRole,schedule.startDate,schedule.endDate,row.notes || null,userId]
+    );
+    await replaceAssignmentWorkDays(db,assignment.rows[0].id,schedule.workDates);
+    if (schedule.workDates.length) {
+      const overlaps = await db.query(
+        `SELECT DISTINCT t.task_code,t.task_name,p.project_name,e.full_name
+         FROM task_assignments ta JOIN tasks t ON t.id=ta.task_id
+         JOIN projects p ON p.id=t.project_id JOIN employees e ON e.id=ta.employee_id
+         JOIN task_assignment_work_days existing_day ON existing_day.task_assignment_id=ta.id
+         WHERE ta.employee_id=$1 AND ta.task_id<>$2 AND ta.is_active=true
+           AND t.deleted_at IS NULL AND t.status NOT IN ('Hủy','Hoàn thành','Lưu trữ')
+           AND existing_day.work_date=ANY($3::date[])`,
+        [employeeId,task.id,schedule.workDates]
+      );
+      for (const overlap of overlaps.rows) {
+        warnings.push(`${overlap.full_name} đang có “${overlap.task_name}” thuộc ${overlap.project_name} trong cùng thời gian`);
+      }
+    }
+  }
+  const refreshedTask = await refreshTaskPlan(db,task.id);
+  return { warnings:[...new Set(warnings)], syncedEmployees, task:refreshedTask };
+}
+
+async function createAssignedTask(db,payload,userId){
+  const {
+    project_id,work_item_id,task_type,task_name,description,start_date,end_date,
+    estimated_duration,estimated_hours,priority,notify_before_days,notes,assignments,
+    production_stage_instance_id,
+  }=payload;
+  validateDateRange(start_date,end_date,'Nhiệm vụ');
+  const definition=await resolveTaskDefinition(db,project_id,work_item_id,task_type,task_name);
+  await validateProductionStage(db,project_id,production_stage_instance_id);
+  const taskCode=await CodeGenerator.generateTaskCode(definition.taskType,db);
+  const result=await db.query(`INSERT INTO tasks (
+      task_code,project_id,work_item_id,task_type,task_name,execution_type,description,
+      start_date,end_date,estimated_duration,estimated_hours,priority,notify_before_days,notes,
+      created_by,production_stage_instance_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[
+    taskCode,project_id,definition.workItemId,definition.taskType,definition.taskName,definition.executionType,
+    description,start_date,end_date,estimated_duration,estimated_hours??definition.defaultEstimatedHours,
+    priority||'Trung bình',notify_before_days||1,notes,userId,production_stage_instance_id||null,
+  ]);
+  const assignmentResult=await saveInitialAssignments(db,result.rows[0],assignments,userId);
+  await refreshProductionStageFromWorks(db,production_stage_instance_id);
+  return {task:assignmentResult.task||result.rows[0],warnings:assignmentResult.warnings,syncedEmployees:assignmentResult.syncedEmployees};
+}
 
 // ==================== TASKS CRUD ====================
 
@@ -50,13 +278,38 @@ router.get('/', async (req, res, next) => {
       is_overdue,
       is_archived,
       employee_id,
+      from_date,
+      to_date,
     } = req.query;
 
     let query = `
-      SELECT t.*, p.project_name, p.project_code, c.company_name
+      SELECT t.*, p.project_name, p.project_code, p.project_type, c.company_name,
+        wi.name work_item_name,wg.id work_group_id,wg.name work_group_name,wg.color work_group_color,
+        stage.stage_code,stage.stage_name,stage.sequence_no stage_sequence_no,
+        production.id production_order_id,production.production_code,production.status production_status,
+        production.planned_start_date production_start_date,production.planned_end_date production_end_date,
+        production.group_name production_group_name,production.process_name,plan.plan_code,
+        orders.id order_id,orders.order_code,
+        COALESCE((SELECT jsonb_agg(jsonb_build_object(
+          'id',ta.id,'employee_id',e.id,'full_name',e.full_name,'position',e.position,
+          'department',e.department,'role_in_task',ta.role_in_task,'start_date',ta.start_date,
+          'end_date',ta.end_date,'notes',ta.notes,
+          'work_dates',COALESCE((SELECT jsonb_agg(to_char(day.work_date,'YYYY-MM-DD') ORDER BY day.work_date)
+            FROM task_assignment_work_days day WHERE day.task_assignment_id=ta.id),'[]'::jsonb),
+          'planned_days',(SELECT count(*)::int FROM task_assignment_work_days day WHERE day.task_assignment_id=ta.id),
+          'planned_hours',COALESCE((SELECT sum(day.planned_hours) FROM task_assignment_work_days day WHERE day.task_assignment_id=ta.id),0)
+        ) ORDER BY e.full_name)
+          FROM task_assignments ta JOIN employees e ON e.id=ta.employee_id
+          WHERE ta.task_id=t.id AND ta.is_active=true),'[]'::jsonb) assignments
       FROM tasks t
       JOIN projects p ON t.project_id = p.id
       LEFT JOIN customers c ON p.customer_id = c.id
+      LEFT JOIN work_items wi ON wi.id=t.work_item_id
+      LEFT JOIN work_groups wg ON wg.id=wi.group_id
+      LEFT JOIN production_stage_instances stage ON stage.id=t.production_stage_instance_id
+      LEFT JOIN production_orders production ON production.id=stage.production_order_id
+      LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
+      LEFT JOIN project_orders orders ON orders.id=production.order_id
       WHERE t.deleted_at IS NULL  
         AND p.deleted_at IS NULL
     `;
@@ -103,13 +356,107 @@ router.get('/', async (req, res, next) => {
       paramIndex++;
     }
 
-    query += ' ORDER BY t.created_at DESC';
+    if (req.query.production_stage_instance_id) {
+      query += ` AND t.production_stage_instance_id = $${paramIndex}`;
+      params.push(req.query.production_stage_instance_id);
+      paramIndex++;
+    }
+
+    if (from_date || to_date) {
+      const fromDate = from_date || '0001-01-01';
+      const toDate = to_date || '9999-12-31';
+      validateDateRange(fromDate,toDate,'Khoảng lọc');
+      query += ` AND (
+        EXISTS (
+          SELECT 1 FROM task_assignments filtered_assignment
+          JOIN task_assignment_work_days filtered_day ON filtered_day.task_assignment_id=filtered_assignment.id
+          WHERE filtered_assignment.task_id=t.id AND filtered_assignment.is_active=true
+            AND filtered_day.work_date BETWEEN $${paramIndex}::date AND $${paramIndex + 1}::date
+        ) OR (
+          NOT EXISTS (
+            SELECT 1 FROM task_assignments dated_assignment
+            JOIN task_assignment_work_days dated_day ON dated_day.task_assignment_id=dated_assignment.id
+            WHERE dated_assignment.task_id=t.id AND dated_assignment.is_active=true
+          )
+          AND COALESCE(t.start_date,$${paramIndex}::date) <= $${paramIndex + 1}::date
+          AND COALESCE(t.end_date,$${paramIndex + 1}::date) >= $${paramIndex}::date
+        )
+      )`;
+      params.push(fromDate,toDate);
+      paramIndex += 2;
+    }
+
+    query += ` ORDER BY COALESCE(t.start_date,stage.planned_start_date,production.planned_start_date,'9999-12-31'::date),
+      production.created_at NULLS LAST,stage.sequence_no NULLS LAST,t.created_at,t.id`;
 
     const result = await pool.query(query, params);
+
+    const stageParams=[];
+    let stageFilter='';
+    if(project_id){stageParams.push(project_id);stageFilter=' AND production.project_id=$1';}
+    const productionStages=await pool.query(`SELECT stage.id,stage.sequence_no,stage.stage_code,stage.stage_name,
+      stage.planned_start_date,stage.planned_end_date,stage.status,
+      production.id production_order_id,production.production_code,production.group_name,production.process_name,
+      production.status production_status,production.planned_start_date production_start_date,
+      production.planned_end_date production_end_date,orders.id order_id,orders.order_code,
+      project.id project_id,project.project_code,project.project_name,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('order_item_id',source.id,'item_code',source.item_code,
+        'item_name',source.item_name,'unit',source.unit,'planned_quantity',production_item.planned_quantity,
+        'completed_quantity',COALESCE((SELECT stage_item.good_quantity
+          FROM production_stage_items stage_item
+          JOIN production_stage_instances completion_stage ON completion_stage.id=stage_item.stage_instance_id
+          WHERE stage_item.production_order_item_id=production_item.id AND completion_stage.tracks_quantity=true
+          ORDER BY completion_stage.sequence_no DESC,stage_item.id DESC LIMIT 1),0)) ORDER BY source.id)
+        FROM production_order_items production_item
+        JOIN project_order_items source ON source.id=production_item.order_item_id
+        WHERE production_item.production_order_id=production.id),'[]'::jsonb) production_items
+      FROM production_stage_instances stage
+      JOIN production_orders production ON production.id=stage.production_order_id
+      JOIN project_orders orders ON orders.id=production.order_id
+      JOIN projects project ON project.id=production.project_id
+      LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
+      WHERE project.deleted_at IS NULL AND production.status<>'CANCELLED'
+        AND COALESCE(plan.status,'PLANNED')<>'CANCELLED'${stageFilter}
+      ORDER BY COALESCE(stage.planned_start_date,production.planned_start_date,'9999-12-31'::date),
+        production.created_at,stage.sequence_no`,stageParams);
+
+    const orderItemParams=[];
+    let orderItemFilter='';
+    if(project_id){orderItemParams.push(project_id);orderItemFilter=' AND orders.project_id=$1';}
+    const orderItems=await pool.query(`SELECT orders.id order_id,orders.order_code,orders.status order_status,
+      orders.project_id,source.id order_item_id,source.item_code,source.item_name,source.unit,
+      source.quantity order_quantity,
+      COALESCE((SELECT SUM(production_item.planned_quantity)
+        FROM production_order_items production_item
+        JOIN production_orders production ON production.id=production_item.production_order_id
+        LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
+        WHERE production_item.order_item_id=source.id AND production.status<>'CANCELLED'
+          AND COALESCE(plan.status,'PLANNED')<>'CANCELLED'),0) allocated_quantity,
+      COALESCE((SELECT SUM(COALESCE((SELECT stage_item.good_quantity
+          FROM production_stage_items stage_item
+          JOIN production_stage_instances completion_stage ON completion_stage.id=stage_item.stage_instance_id
+          WHERE stage_item.production_order_item_id=production_item.id AND completion_stage.tracks_quantity=true
+          ORDER BY completion_stage.sequence_no DESC,stage_item.id DESC LIMIT 1),0))
+        FROM production_order_items production_item
+        JOIN production_orders production ON production.id=production_item.production_order_id
+        LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
+        WHERE production_item.order_item_id=source.id AND production.status<>'CANCELLED'
+          AND COALESCE(plan.status,'PLANNED')<>'CANCELLED'),0) completed_quantity
+      FROM project_orders orders
+      JOIN project_order_items source ON source.order_id=orders.id
+      JOIN projects project ON project.id=orders.project_id
+      WHERE project.deleted_at IS NULL${orderItemFilter}
+        AND EXISTS(SELECT 1 FROM production_orders production
+          LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
+          WHERE production.order_id=orders.id AND production.status<>'CANCELLED'
+            AND COALESCE(plan.status,'PLANNED')<>'CANCELLED')
+      ORDER BY orders.created_at,orders.id,source.id`,orderItemParams);
 
     res.json({
       success: true,
       data: result.rows,
+      production_stages: productionStages.rows,
+      order_items: orderItems.rows,
     });
   } catch (error) {
     console.error('Error in GET /tasks:', error);
@@ -122,10 +469,18 @@ router.get('/:id', async (req, res, next) => {
   try {
     // Task basic info
     const taskResult = await pool.query(
-      `SELECT t.*, p.project_name, p.project_code, c.company_name
+      `SELECT t.*, p.project_name, p.project_code,p.project_type,c.company_name,
+        wi.name work_item_name,wg.id work_group_id,wg.name work_group_name,wg.color work_group_color,
+        stage.stage_code,stage.stage_name,stage.sequence_no stage_sequence_no,production.production_code,
+        production.group_name production_group_name,production.process_name,plan.plan_code
        FROM tasks t
        JOIN projects p ON t.project_id = p.id
        LEFT JOIN customers c ON p.customer_id = c.id
+       LEFT JOIN work_items wi ON wi.id=t.work_item_id
+       LEFT JOIN work_groups wg ON wg.id=wi.group_id
+       LEFT JOIN production_stage_instances stage ON stage.id=t.production_stage_instance_id
+       LEFT JOIN production_orders production ON production.id=stage.production_order_id
+       LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
        WHERE t.id = $1`,
       [req.params.id]
     );
@@ -147,9 +502,17 @@ router.get('/:id', async (req, res, next) => {
 
     // Get assigned employees
     const assignments = await pool.query(
-      `SELECT ta.*, e.full_name, e.phone, e.position, e.department
+      `SELECT ta.*, e.full_name, e.phone, e.position, e.department,
+        COALESCE(day_plan.work_dates,'[]'::jsonb) work_dates,
+        COALESCE(day_plan.planned_days,0) planned_days,
+        COALESCE(day_plan.planned_hours,0) planned_hours
        FROM task_assignments ta
        JOIN employees e ON ta.employee_id = e.id
+       LEFT JOIN LATERAL (
+         SELECT jsonb_agg(to_char(day.work_date,'YYYY-MM-DD') ORDER BY day.work_date) work_dates,
+           count(*)::int planned_days,sum(day.planned_hours)::numeric(10,2) planned_hours
+         FROM task_assignment_work_days day WHERE day.task_assignment_id=ta.id
+       ) day_plan ON true
        WHERE ta.task_id = $1 AND ta.is_active = TRUE`,
       [req.params.id]
     );
@@ -181,6 +544,26 @@ router.get('/:id', async (req, res, next) => {
 });
 
 // POST create new task
+router.post('/batch',validateTask,async(req,res,next)=>{
+  const errors=validationResult(req);
+  if(!errors.isEmpty())return res.status(400).json({success:false,errors:errors.array()});
+  const workItemIds=[...new Set((req.body.work_item_ids||[]).map(Number).filter(Number.isInteger))];
+  if(!workItemIds.length||workItemIds.length>10)return res.status(400).json({success:false,message:'Chọn từ 1 đến 10 Công việc'});
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const created=[];const warnings=[];const synced=[];
+    for(const workItemId of workItemIds){
+      const result=await createAssignedTask(client,{...req.body,work_item_id:workItemId},req.user?.id||1);
+      created.push(result.task);warnings.push(...result.warnings);synced.push(...result.syncedEmployees);
+    }
+    await client.query('COMMIT');
+    res.status(201).json({success:true,message:`Đã tạo và phân công ${created.length} Công việc`,data:created,
+      warnings:[...new Set(warnings)],synced_project_employees:[...new Set(synced)]});
+  }catch(error){await client.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}
+  finally{client.release();}
+});
+
 router.post('/', validateTask, async (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -194,59 +577,20 @@ router.post('/', validateTask, async (req, res, next) => {
 
   try {
     await client.query('BEGIN');
-
-    const {
-      project_id,
-      task_type,
-      task_name,
-      description,
-      start_date,
-      end_date,
-      estimated_duration,
-      estimated_hours,
-      priority,
-      notify_before_days,
-      notes,
-    } = req.body;
-
-    await ensureActiveCatalog('TASK_TYPE', task_type);
-    // Generate task code
-    const taskCode = await CodeGenerator.generateTaskCode(task_type);
-
-    const result = await client.query(
-      `INSERT INTO tasks (
-        task_code, project_id, task_type, task_name, description,
-        start_date, end_date, estimated_duration, estimated_hours,
-        priority, notify_before_days, notes, created_by
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      RETURNING *`,
-      [
-        taskCode,
-        project_id,
-        task_type,
-        task_name,
-        description,
-        start_date,
-        end_date,
-        estimated_duration,
-        estimated_hours,
-        priority || 'Trung bình',
-        notify_before_days || 1,
-        notes,
-        req.user?.id || 1,
-      ]
-    );
+    const created=await createAssignedTask(client,req.body,req.user?.id||1);
 
     await client.query('COMMIT');
 
     res.status(201).json({
       success: true,
       message: 'Tạo nhiệm vụ thành công',
-      data: result.rows[0],
+      data: created.task,
+      warnings: created.warnings,
+      synced_project_employees: created.syncedEmployees,
     });
   } catch (error) {
     await client.query('ROLLBACK');
+    if (error.status) return res.status(error.status).json({ success:false, message:error.message });
     next(error);
   } finally {
     client.release();
@@ -263,75 +607,83 @@ router.put('/:id', validateTask, async (req, res, next) => {
     });
   }
 
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const {
       project_id,
+      work_item_id,
       task_type,
       task_name,
       description,
-      start_date,
-      end_date,
-      estimated_duration,
-      estimated_hours,
       status,
       progress,
       priority,
       notify_before_days,
       notes,
+      production_stage_instance_id,
     } = req.body;
 
-    await ensureActiveCatalog('TASK_TYPE', task_type);
-    const result = await pool.query(
+    const currentTask=await client.query(`SELECT project_id,production_stage_instance_id FROM tasks WHERE id=$1 FOR UPDATE`,[req.params.id]);
+    if(!currentTask.rowCount)throw Object.assign(new Error('Không tìm thấy nhiệm vụ'),{status:404});
+    const definition = await resolveTaskDefinition(client, project_id, work_item_id, task_type, task_name);
+    await validateProductionStage(client,project_id,production_stage_instance_id);
+    const result = await client.query(
       `UPDATE tasks SET
         project_id = $1,
-        task_type = $2,
-        task_name = $3,
-        description = $4,
-        start_date = $5,
-        end_date = $6,
-        estimated_duration = $7,
-        estimated_hours = $8,
-        status = $9,
-        progress = $10,
-        priority = $11,
-        notify_before_days = $12,
-        notes = $13,
+        work_item_id = $2,
+        task_type = $3,
+        task_name = $4,
+        execution_type = $5,
+        description = $6,
+        status = $7,
+        progress = $8,
+        priority = $9,
+        notify_before_days = $10,
+        notes = $11,
+        production_stage_instance_id = $12,
         updated_at = NOW()
-      WHERE id = $14
+      WHERE id = $13
       RETURNING *`,
       [
         project_id,
-        task_type,
-        task_name,
+        definition.workItemId,
+        definition.taskType,
+        definition.taskName,
+        definition.executionType,
         description,
-        start_date,
-        end_date,
-        estimated_duration,
-        estimated_hours,
-        status,
-        progress,
-        priority,
-        notify_before_days,
+        status || 'Chưa bắt đầu',
+        progress ?? 0,
+        priority || 'Trung bình',
+        notify_before_days ?? 1,
         notes,
+        production_stage_instance_id || null,
         req.params.id,
       ]
     );
 
     if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({
         success: false,
         message: 'Không tìm thấy nhiệm vụ',
       });
     }
 
+    await refreshProductionStageFromWorks(client,currentTask.rows[0].production_stage_instance_id);
+    if(Number(currentTask.rows[0].production_stage_instance_id)!==Number(production_stage_instance_id))await refreshProductionStageFromWorks(client,production_stage_instance_id);
+
+    await client.query('COMMIT');
     res.json({
       success: true,
       message: 'Cập nhật nhiệm vụ thành công',
       data: result.rows[0],
     });
   } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.status) return res.status(error.status).json({ success:false, message:error.message });
     next(error);
-  }
+  } finally { client.release(); }
 });
 
 // PATCH complete task
@@ -340,6 +692,19 @@ router.patch('/:id/complete', async (req, res, next) => {
 
   try {
     await client.query('BEGIN');
+
+    const executionCheck=await client.query(`SELECT t.execution_type,
+      COUNT(location.id)::int total_locations,COUNT(location.id) FILTER(WHERE location.is_completed=true)::int completed_locations
+      FROM tasks t LEFT JOIN task_locations location ON location.task_id=t.id WHERE t.id=$1 GROUP BY t.id`,[req.params.id]);
+    if(executionCheck.rowCount&&executionCheck.rows[0].execution_type){
+      const check=executionCheck.rows[0];
+      if(!check.total_locations||check.completed_locations!==check.total_locations){
+        await client.query('ROLLBACK');
+        return res.status(409).json({success:false,message:check.total_locations
+          ?`Còn ${check.total_locations-check.completed_locations} địa điểm chưa hoàn thành. Người quản lý chưa thể duyệt hoàn thành Task.`
+          :'Công việc Giao hàng/Lắp đặt chưa có danh sách địa điểm.'});
+      }
+    }
 
     const result = await client.query(
       `UPDATE tasks SET
@@ -362,6 +727,7 @@ router.patch('/:id/complete', async (req, res, next) => {
         message: 'Không tìm thấy nhiệm vụ',
       });
     }
+    await refreshProductionStageFromWorks(client,result.rows[0].production_stage_instance_id);
 
     // Create notification
     await client.query(
@@ -436,7 +802,7 @@ router.delete('/:id', async (req, res, next) => {
     
     // Check if task exists and not deleted
     const checkResult = await client.query(
-      'SELECT id, task_name, task_code, status, deleted_at FROM tasks WHERE id = $1',
+      'SELECT id, task_name, task_code, status, deleted_at, production_stage_instance_id FROM tasks WHERE id = $1',
       [taskId]
     );
     
@@ -469,6 +835,9 @@ router.delete('/:id', async (req, res, next) => {
        RETURNING *`,
       [userId, taskId]
     );
+    await client.query(`DELETE FROM shopfloor_work_board_items item USING shopfloor_work_boards board
+      WHERE item.board_id=board.id AND item.task_id=$1 AND item.source_type='TASK_ASSIGNMENT'
+        AND board.status NOT IN ('LOCKED','CLOSED')`,[taskId]);
     
     // Count deactivated assignments (trigger sẽ tự động làm)
     const countResult = await client.query(
@@ -477,12 +846,15 @@ router.delete('/:id', async (req, res, next) => {
        WHERE task_id = $1 AND is_active = FALSE`,
       [taskId]
     );
+    await refreshProductionStageFromWorks(client,task.production_stage_instance_id);
     
     await client.query('COMMIT');
     
     res.json({
       success: true,
-      message: `Xóa nhiệm vụ "${task.task_name}" thành công. Đã giải phóng ${countResult.rows[0].count} nhân viên.`,
+      message: task.production_stage_instance_id
+        ? `Đã xóa Công việc "${task.task_name}" khỏi Công đoạn; Công đoạn và phân bổ Đơn hàng được giữ nguyên.`
+        : `Xóa nhiệm vụ "${task.task_name}" thành công. Đã giải phóng ${countResult.rows[0].count} nhân viên.`,
       data: {
         task: result.rows[0],
         freed_employees_count: parseInt(countResult.rows[0].count)
@@ -887,25 +1259,33 @@ router.delete('/:taskId/locations/:locationId', async (req, res, next) => {
 
 // POST assign employee to task
 router.post('/:id/assignments', async (req, res, next) => {
+  const client = await pool.connect();
   try {
-    const { employee_id, role_in_task, start_date, end_date, notes } = req.body;
-
-    // Check if employee is in project team
-    const checkResult = await pool.query(
-      `SELECT 1 FROM project_assignments pa
-       JOIN tasks t ON pa.project_id = t.project_id
-       WHERE t.id = $1 AND pa.employee_id = $2`,
-      [req.params.id, employee_id]
+    const { employee_id, role_in_task, project_role, notes } = req.body;
+    await client.query('BEGIN');
+    const task = await client.query('SELECT id,project_id,start_date,end_date FROM tasks WHERE id=$1 AND deleted_at IS NULL', [req.params.id]);
+    if (!task.rowCount) throw Object.assign(new Error('Không tìm thấy Task'), { status:404 });
+    const schedule = normalizeAssignmentSchedule(req.body,task.rows[0]);
+    const employee = await client.query(`SELECT full_name FROM employees WHERE id=$1 AND status='Hoạt động'`, [employee_id]);
+    if (!employee.rowCount) throw Object.assign(new Error('Nhân viên không hợp lệ hoặc đã ngừng hoạt động'), { status:400 });
+    const existingProjectAssignment = await client.query(
+      'SELECT role FROM project_assignments WHERE project_id=$1 AND employee_id=$2 ORDER BY id LIMIT 1',
+      [task.rows[0].project_id,employee_id]
     );
-
-    if (checkResult.rows.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nhân viên không thuộc đội ngũ dự án này',
-      });
+    let syncedToProject = false;
+    const selectedProjectRole = project_role || role_in_task;
+    if (!existingProjectAssignment.rowCount) {
+      await ensureActiveCatalog('PROJECT_ROLE',selectedProjectRole,client);
+      await client.query(
+        `INSERT INTO project_assignments(project_id,employee_id,role,notes)
+         VALUES($1,$2,$3,$4)`,
+        [task.rows[0].project_id,employee_id,selectedProjectRole,'Tự động thêm khi phân công Task']
+      );
+      syncedToProject = true;
     }
-
-    const result = await pool.query(
+    const selectedTaskRole = role_in_task || existingProjectAssignment.rows[0]?.role || selectedProjectRole;
+    await ensureActiveCatalog('PROJECT_ROLE',selectedTaskRole,client);
+    const result = await client.query(
       `INSERT INTO task_assignments (
         task_id, employee_id, role_in_task, start_date, end_date, notes, assigned_by
       )
@@ -921,28 +1301,53 @@ router.post('/:id/assignments', async (req, res, next) => {
       [
         req.params.id,
         employee_id,
-        role_in_task,
-        start_date,
-        end_date,
+        selectedTaskRole,
+        schedule.startDate,
+        schedule.endDate,
         notes,
         req.user?.id || 1,
       ]
     );
-
+    await replaceAssignmentWorkDays(client,result.rows[0].id,schedule.workDates);
+    const refreshedTask = await refreshTaskPlan(client,req.params.id);
+    const overlaps = await client.query(
+      `SELECT DISTINCT t.task_code,t.task_name,p.project_name
+       FROM task_assignments assignment
+       JOIN task_assignment_work_days day ON day.task_assignment_id=assignment.id
+       JOIN tasks t ON t.id=assignment.task_id
+       JOIN projects p ON p.id=t.project_id
+       WHERE assignment.employee_id=$1 AND assignment.id<>$2 AND assignment.is_active=true
+         AND t.deleted_at IS NULL AND t.status NOT IN ('Hủy','Hoàn thành','Lưu trữ')
+         AND day.work_date=ANY($3::date[])`,
+      [employee_id,result.rows[0].id,schedule.workDates]
+    );
+    await client.query('COMMIT');
     res.status(201).json({
       success: true,
-      message: 'Phân công nhân viên thành công',
-      data: result.rows[0],
+      message: syncedToProject ? 'Phân công thành công và đã thêm nhân viên vào dự án' : 'Phân công nhân viên thành công',
+      data: {
+        ...result.rows[0],
+        work_dates:schedule.workDates,
+        planned_days:schedule.workDates.length,
+        planned_hours:schedule.plannedHours,
+      },
+      task_plan: refreshedTask,
+      warnings:overlaps.rows.map(item=>`Trùng lịch với “${item.task_name}” thuộc ${item.project_name}`),
+      synced_to_project: syncedToProject,
     });
   } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.status) return res.status(error.status).json({ success:false, message:error.message });
     next(error);
-  }
+  } finally { client.release(); }
 });
 
 // DELETE remove employee from task
 router.delete('/:taskId/assignments/:assignmentId', async (req, res, next) => {
+  const client = await pool.connect();
   try {
-    const result = await pool.query(
+    await client.query('BEGIN');
+    const result = await client.query(
       `UPDATE task_assignments SET is_active = FALSE
        WHERE id = $1 AND task_id = $2
        RETURNING *`,
@@ -950,19 +1355,25 @@ router.delete('/:taskId/assignments/:assignmentId', async (req, res, next) => {
     );
 
     if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({
         success: false,
         message: 'Không tìm thấy phân công',
       });
     }
 
+    const taskPlan = await refreshTaskPlan(client,req.params.taskId);
+    await client.query('COMMIT');
+
     res.json({
       success: true,
       message: 'Xóa phân công thành công',
+      task_plan:taskPlan,
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     next(error);
-  }
+  } finally { client.release(); }
 });
 
 // ==================== TASK NOTIFICATIONS ====================

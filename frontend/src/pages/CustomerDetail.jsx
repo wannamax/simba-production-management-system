@@ -201,11 +201,14 @@ const CustomerDetail = () => {
           <Descriptions.Item label="Mã số thuế">
             {customer.tax_code || '-'}
           </Descriptions.Item>
-          <Descriptions.Item label="Thành phố">
-            {customer.city || '-'}
+          <Descriptions.Item label="Tỉnh/Thành phố">
+            {customer.province_name ? `${customer.province_type} ${customer.province_name}` : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="Phường/Xã/Đặc khu">
+            {customer.commune_name ? `${customer.commune_type} ${customer.commune_name}` : '-'}
           </Descriptions.Item>
           <Descriptions.Item label="Địa chỉ" span={3}>
-            <EnvironmentOutlined /> {customer.address || '-'}
+            <EnvironmentOutlined /> {[customer.address, customer.commune_name && `${customer.commune_type} ${customer.commune_name}`, customer.province_name && `${customer.province_type} ${customer.province_name}`].filter(Boolean).join(', ') || '-'}
           </Descriptions.Item>
           {customer.notes && (
             <Descriptions.Item label="Ghi chú" span={3}>
