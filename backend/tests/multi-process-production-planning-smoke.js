@@ -20,7 +20,7 @@ function localDate(value) {
   try {
     const health = await request('/health');
     assert.equal(health.status, 200);
-    assert.equal(health.body.version, '2.6.0-J');
+    assert.equal(health.body.version, '2.6.0-K');
 
     const meta = await request('/production-workflows/meta');
     assert.equal(meta.status, 200);
@@ -134,7 +134,7 @@ function localDate(value) {
     assert.equal(localDate(phasePlan.body.data.groups[0].stages[0].planned_start_date), '2026-08-01');
     assert.equal(localDate(phasePlan.body.data.groups[0].stages[0].planned_end_date), '2026-08-05');
 
-    console.log(`Multi-Process Production Planning 2.6.0-J smoke test passed (${plan.body.data.plan_code})`);
+    console.log(`Multi-Process Production Planning 2.6.0-K smoke test passed (${plan.body.data.plan_code})`);
   } finally {
     if (projectId) await request(`/projects/${projectId}`, { method: 'DELETE' }).catch(() => {});
     for (const processId of processIds) await request(`/production-workflows/processes/${processId}`, { method: 'DELETE' }).catch(() => {});

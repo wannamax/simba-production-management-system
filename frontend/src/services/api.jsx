@@ -202,6 +202,7 @@ export const productionWorkflowAPI = {
   deleteProcess: id => api.delete(`/production-workflows/processes/${id}`),
   getContext: orderId => api.get(`/production-workflows/context/${orderId}`),
   createOrder: data => api.post('/production-workflows/orders', data),
+  createDirectOrder: data => api.post('/production-workflows/orders/direct', data),
   getOrders: params => api.get('/production-workflows/orders', { params }),
   getOrder: id => api.get(`/production-workflows/orders/${id}`),
   recordOutput: (stageItemId, data) => api.post(`/production-workflows/stage-items/${stageItemId}/output`, data),

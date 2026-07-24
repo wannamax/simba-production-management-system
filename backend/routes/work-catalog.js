@@ -201,7 +201,8 @@ router.delete('/items/:id', async (req, res, next) => {
 
     const dependencies = await client.query(
       `SELECT
-        (SELECT count(*)::int FROM production_process_stages WHERE work_item_id=$1) AS process_stage_count,
+        ((SELECT count(*)::int FROM production_process_stages WHERE work_item_id=$1)
+          + (SELECT count(*)::int FROM production_process_stage_work_items WHERE work_item_id=$1)) AS process_stage_count,
         (SELECT count(*)::int FROM production_stage_instances WHERE work_item_id=$1) AS production_stage_count`,
       [req.params.id]
     );

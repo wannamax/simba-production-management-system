@@ -19,28 +19,42 @@ function datesBetween(start,end){
 }
 function normalizeStages(stages){
   if(!Array.isArray(stages)||!stages.length)throw fail('Quy trình cần ít nhất một công đoạn');
-  return stages.map((stage,index)=>({
-    sequence_no:index+1,
-    code:String(stage.code||`STAGE_${index+1}`).trim().toUpperCase().replace(/[^A-Z0-9_-]+/g,'_'),
-    name:String(stage.name||'').trim(),
-    work_item_id:stage.work_item_id||null,
-    is_required:stage.is_required!==false,
-    tracks_quantity:stage.tracks_quantity!==false,
-    allow_parallel:stage.allow_parallel===true,
-  })).map((stage,index)=>{if(!stage.name)throw fail(`Công đoạn ${index+1}: chưa có tên`);return stage;});
+  return stages.map((stage,index)=>{
+    const workItemIds=[...new Set((Array.isArray(stage.work_item_ids)?stage.work_item_ids:[stage.work_item_id]).map(Number).filter(Number.isInteger))];
+    return {
+      sequence_no:index+1,
+      code:String(stage.code||`STAGE_${index+1}`).trim().toUpperCase().replace(/[^A-Z0-9_-]+/g,'_'),
+      name:String(stage.name||'').trim(),
+      work_item_id:workItemIds[0]||null,
+      work_item_ids:workItemIds,
+      is_required:stage.is_required!==false,
+      tracks_quantity:stage.tracks_quantity!==false,
+      allow_parallel:stage.allow_parallel===true,
+    };
+  }).map((stage,index)=>{if(!stage.name)throw fail(`Công đoạn ${index+1}: chưa có tên`);return stage;});
 }
 async function replaceProcessStages(db,processId,stages){
   await db.query('DELETE FROM production_process_stages WHERE process_id=$1',[processId]);
-  for(const stage of stages)await db.query(
-    `INSERT INTO production_process_stages(process_id,sequence_no,code,name,work_item_id,is_required,tracks_quantity,allow_parallel,default_hours)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL)`,
-    [processId,stage.sequence_no,stage.code,stage.name,stage.work_item_id,stage.is_required,stage.tracks_quantity,stage.allow_parallel]
-  );
+  for(const stage of stages){
+    const inserted=await db.query(
+      `INSERT INTO production_process_stages(process_id,sequence_no,code,name,work_item_id,is_required,tracks_quantity,allow_parallel,default_hours)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL) RETURNING id`,
+      [processId,stage.sequence_no,stage.code,stage.name,stage.work_item_id,stage.is_required,stage.tracks_quantity,stage.allow_parallel]
+    );
+    for(const workItemId of stage.work_item_ids)await db.query(
+      `INSERT INTO production_process_stage_work_items(production_process_stage_id,work_item_id) VALUES($1,$2)`,
+      [inserted.rows[0].id,workItemId]
+    );
+  }
 }
 async function getProcess(db,id){
   const process=await db.query('SELECT * FROM production_processes WHERE id=$1',[id]);
   if(!process.rowCount)throw fail('Không tìm thấy quy trình sản xuất',404);
-  const stages=await db.query(`SELECT s.*,wi.name work_item_name,wg.name work_group_name FROM production_process_stages s
+  const stages=await db.query(`SELECT s.*,wi.name work_item_name,wg.name work_group_name,
+    COALESCE((SELECT jsonb_agg(link.work_item_id ORDER BY linked_item.name)
+      FROM production_process_stage_work_items link JOIN work_items linked_item ON linked_item.id=link.work_item_id
+      WHERE link.production_process_stage_id=s.id),'[]'::jsonb) work_item_ids
+    FROM production_process_stages s
     LEFT JOIN work_items wi ON wi.id=s.work_item_id LEFT JOIN work_groups wg ON wg.id=wi.group_id
     WHERE s.process_id=$1 ORDER BY s.sequence_no`,[id]);
   return {...process.rows[0],stages:stages.rows};
@@ -51,6 +65,18 @@ async function generateProductionCode(db){
   const result=await db.query(`SELECT COALESCE(MAX(CASE WHEN substring(production_code FROM char_length($1)+1) ~ '^[0-9]+$'
     THEN substring(production_code FROM char_length($1)+1)::int END),0)+1 next_number FROM production_orders WHERE production_code LIKE $2`,[prefix,`${prefix}%`]);
   return `${prefix}${String(result.rows[0].next_number).padStart(4,'0')}`;
+}
+async function ensureOrderWorkspace(db,order){
+  await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`production-workspace.${order.id}`]);
+  const existing=await db.query(`SELECT * FROM production_plans WHERE order_id=$1 AND is_order_workspace=true FOR UPDATE`,[order.id]);
+  if(existing.rowCount)return existing.rows[0];
+  const planCode=`MPL-WS-${order.id}`;
+  const created=await db.query(`INSERT INTO production_plans(plan_code,project_id,order_id,time_mode,planned_start_date,planned_end_date,project_schedule_snapshot,status,notes,is_order_workspace,created_by)
+    VALUES($1,$2,$3,'CUSTOM',$4,$5,$6,'PLANNED','Không gian thực hiện tự động của Đơn hàng',true,$7) RETURNING *`,[
+    planCode,order.project_id,order.id,order.order_date||null,order.expected_delivery_date||null,
+    JSON.stringify({automatic:true,source:'ORDER_WORKSPACE'}),order.created_by||1,
+  ]);
+  return created.rows[0];
 }
 async function ensureEmployees(db,ids){
   const unique=[...new Set(ids.map(Number).filter(Number.isInteger))];
@@ -159,7 +185,8 @@ router.get('/context/:orderId',async(req,res,next)=>{try{
       WHERE e.status='Hoạt động' ORDER BY (pa.id IS NOT NULL) DESC,e.full_name`,[order.rows[0].project_id]),
     pool.query(`SELECT name,is_default FROM system_catalogs WHERE catalog_type='PROJECT_ROLE' AND is_active=true ORDER BY is_default DESC,sort_order,name`),
   ]);
-  res.json({success:true,data:{order:{...order.rows[0],items:items.rows},processes:processes.rows,employees:employees.rows,roles:roles.rows}});
+  const workspace=await ensureOrderWorkspace(pool,order.rows[0]);
+  res.json({success:true,data:{order:{...order.rows[0],items:items.rows,production_workspace_id:workspace.id,production_workspace_code:workspace.plan_code},processes:processes.rows,employees:employees.rows,roles:roles.rows}});
 }catch(error){next(error);}});
 
 router.post('/orders',async(req,res,next)=>{const db=await pool.connect();try{
@@ -168,6 +195,7 @@ router.post('/orders',async(req,res,next)=>{const db=await pool.connect();try{
     WHERE o.id=$1 AND o.status IN ('NOT_STARTED','IN_PRODUCTION') FOR UPDATE OF o`,[req.body.order_id]);
   if(!order.rowCount)throw fail('Đơn hàng không ở trạng thái có thể lập Lệnh sản xuất',409);
   let productionPlanId = req.body.production_plan_id ? Number(req.body.production_plan_id) : null;
+  if(!productionPlanId)productionPlanId=(await ensureOrderWorkspace(db,order.rows[0])).id;
   if(productionPlanId){
     const plan=await db.query(`SELECT id,order_id,project_id,status FROM production_plans WHERE id=$1 FOR UPDATE`,[productionPlanId]);
     if(!plan.rowCount)throw fail('Kế hoạch sản xuất không tồn tại',404);
@@ -235,7 +263,29 @@ router.post('/orders',async(req,res,next)=>{const db=await pool.connect();try{
     systemNote:itemsNote(createdSnapshot.items,'Đưa vào sản xuất'),
     snapshot:createdSnapshot,userId:req.user?.id||1,
   });
-  await db.query('COMMIT');res.status(201).json({success:true,message:`Đã tạo ${code} với ${templateStages.length} Công đoạn; hãy gán Công việc trong trang Nhiệm vụ`,data:await getProductionOrder(pool,production.rows[0].id)});
+  await db.query('COMMIT');res.status(201).json({success:true,message:`Đã tạo ${code} theo quy trình với ${templateStages.length} Công đoạn; hãy giao nhiệm vụ trong trang Nhiệm vụ`,data:await getProductionOrder(pool,production.rows[0].id)});
+}catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
+
+router.post('/orders/direct',async(req,res,next)=>{const db=await pool.connect();try{
+  await db.query('BEGIN');
+  const order=await db.query(`SELECT o.*,p.project_type FROM project_orders o JOIN projects p ON p.id=o.project_id
+    WHERE o.id=$1 AND o.status IN ('NOT_STARTED','IN_PRODUCTION') FOR UPDATE OF o`,[req.body.order_id]);
+  if(!order.rowCount)throw fail('Đơn hàng không ở trạng thái có thể lập Lệnh sản xuất',409);
+  const name=String(req.body.name||'Lệnh sản xuất trực tiếp').trim();
+  if(!name)throw fail('Cần nhập tên Lệnh sản xuất trực tiếp');
+  const workspace=await ensureOrderWorkspace(db,order.rows[0]);
+  const code=await generateProductionCode(db);
+  const production=await db.query(`INSERT INTO production_orders(production_code,project_id,order_id,production_plan_id,process_name,process_version,process_snapshot,status,planned_start_date,planned_end_date,notes,created_by,group_name,time_mode,order_type)
+    VALUES($1,$2,$3,$4,$5,1,$6,'PLANNED',$7,$8,$9,$10,$5,'CUSTOM','DIRECT') RETURNING *`,[
+    code,order.rows[0].project_id,order.rows[0].id,workspace.id,name,
+    JSON.stringify({type:'DIRECT',name,stages:[]}),iso(req.body.planned_start_date),iso(req.body.planned_end_date),req.body.notes||null,req.user?.id||1,
+  ]);
+  const stage=await db.query(`INSERT INTO production_stage_instances(production_order_id,sequence_no,stage_code,stage_name,is_required,tracks_quantity,allow_parallel,planned_start_date,planned_end_date)
+    VALUES($1,1,'DIRECT',$2,true,false,true,$3,$4) RETURNING id`,[production.rows[0].id,name,iso(req.body.planned_start_date),iso(req.body.planned_end_date)]);
+  await db.query(`UPDATE project_orders SET status='IN_PRODUCTION' WHERE id=$1`,[order.rows[0].id]);
+  const snapshot=await getProductionOrder(db,production.rows[0].id);
+  await insertExecutionLog(db,{orderId:order.rows[0].id,productionOrderId:production.rows[0].id,eventType:'PRODUCTION_CREATED',eventSummary:`Tạo Lệnh trực tiếp ${code}`,systemNote:'Không dùng Quy trình mẫu; giao nhiệm vụ trực tiếp trong trang Nhiệm vụ',snapshot,metadata:{order_type:'DIRECT',stage_id:stage.rows[0].id},userId:req.user?.id||1});
+  await db.query('COMMIT');res.status(201).json({success:true,message:`Đã tạo ${code}; hãy thêm và giao nhiệm vụ trực tiếp`,data:{...(await getProductionOrder(pool,production.rows[0].id)),direct_stage_id:stage.rows[0].id}});
 }catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
 
 router.get('/orders',async(req,res,next)=>{try{
@@ -257,6 +307,11 @@ router.get('/orders',async(req,res,next)=>{try{
       (SELECT COUNT(*)::int FROM production_stage_instances stage WHERE stage.production_order_id=production.id) stage_count,
       (SELECT COUNT(*)::int FROM tasks work JOIN production_stage_instances stage ON stage.id=work.production_stage_instance_id
         WHERE stage.production_order_id=production.id AND work.deleted_at IS NULL) task_count,
+      COALESCE((SELECT jsonb_agg(DISTINCT employee.full_name ORDER BY employee.full_name)
+        FROM task_assignments assignment JOIN employees employee ON employee.id=assignment.employee_id
+        JOIN tasks work ON work.id=assignment.task_id JOIN production_stage_instances stage ON stage.id=work.production_stage_instance_id
+        WHERE stage.production_order_id=production.id AND work.deleted_at IS NULL AND assignment.is_active=true),'[]'::jsonb) active_employees,
+      COALESCE((SELECT MIN(stage.id) FROM production_stage_instances stage WHERE stage.production_order_id=production.id),0) primary_stage_id,
       COALESCE((SELECT AVG(CASE WHEN stage.tracks_quantity THEN 100*stage_item.good_quantity/NULLIF(stage_item.planned_quantity,0) ELSE 0 END)
         FROM production_stage_instances stage JOIN production_stage_items stage_item ON stage_item.stage_instance_id=stage.id
         WHERE stage.production_order_id=production.id),0) progress,

@@ -180,7 +180,7 @@ const Dashboard = () => {
       <div className="page-header">
         <div>
           <h1 style={{ marginBottom: 0 }}>Tổng quan</h1>
-          <Tag color="blue">{data.display_version || `Simba PMS - Version: ${data.version || '2.6.0-J'}`}</Tag>
+          <Tag color="blue">{data.display_version || `Simba PMS - Version: ${data.version || '2.6.0-K'}`}</Tag>
         </div>
       </div>
 

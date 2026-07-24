@@ -40,6 +40,15 @@ async function generateOrderCode(db) {
   return `${prefix}${String(result.rows[0].next_number).padStart(4, '0')}`;
 }
 
+async function createOrderWorkspace(db, order) {
+  await db.query(
+    `INSERT INTO production_plans(plan_code,project_id,order_id,time_mode,planned_start_date,planned_end_date,project_schedule_snapshot,status,notes,is_order_workspace,created_by)
+     VALUES($1,$2,$3,'CUSTOM',$4,$5,$6,'PLANNED','Không gian thực hiện tự động của Đơn hàng',true,$7)`,
+    [`MPL-WS-${order.id}`,order.project_id,order.id,order.order_date,order.expected_delivery_date,
+      JSON.stringify({ automatic:true, source:'ORDER_WORKSPACE' }),order.created_by||1]
+  );
+}
+
 async function insertItems(db, orderId, items) {
   for (const item of items) {
     await db.query(
@@ -155,7 +164,8 @@ async function getOrder(db, id) {
       WHERE log.order_id=$1 ORDER BY log.created_at DESC,log.id DESC`,[id]),
     getExecutionLogs(db,id),
   ]);
-  return { ...order.rows[0], items:items.rows, production_orders:productions.rows, change_logs:changeLogs.rows, execution_logs:executionLogs };
+  const workspace=await db.query(`SELECT id,plan_code,status,created_at FROM production_plans WHERE order_id=$1 AND is_order_workspace=true LIMIT 1`,[id]);
+  return { ...order.rows[0], items:items.rows, production_workspace:workspace.rows[0]||null, production_orders:productions.rows, change_logs:changeLogs.rows, execution_logs:executionLogs };
 }
 
 router.get('/meta', async (req, res, next) => {
@@ -278,8 +288,9 @@ router.post('/', async (req, res, next) => {
       [code,req.body.project_id,req.body.order_date||null,req.body.expected_delivery_date||null,req.body.notes||null,req.user?.id||1]
     );
     await insertItems(db,order.rows[0].id,items);
+    await createOrderWorkspace(db,order.rows[0]);
     await db.query('COMMIT');
-    res.status(201).json({success:true,message:'Đã tạo đơn hàng — trạng thái Chưa sản xuất',data:await getOrder(pool,order.rows[0].id)});
+    res.status(201).json({success:true,message:'Đã tạo đơn hàng và không gian thực hiện sản xuất',data:await getOrder(pool,order.rows[0].id)});
   } catch(error) {
     await db.query('ROLLBACK');
     if(error.status) return res.status(error.status).json({success:false,message:error.message});

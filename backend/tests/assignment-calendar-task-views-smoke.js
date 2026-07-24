@@ -19,7 +19,7 @@ const localDate = value => new Intl.DateTimeFormat('en-CA', {
   let taskId;
   try {
     const health = await request('/health');
-    assert.equal(health.body.version,'2.6.0-J');
+    assert.equal(health.body.version,'2.6.0-K');
 
     const [customers,employees] = await Promise.all([
       request('/customers?limit=1000'),
@@ -86,7 +86,7 @@ const localDate = value => new Intl.DateTimeFormat('en-CA', {
     const availability = await request(`/employees/availability?employee_ids=${employees.body.data[0].id}&start_date=2026-07-27&end_date=2026-07-30`);
     assert.equal(Number(availability.body.data[0].total_assigned_hours),24);
 
-    console.log('Assignment Calendar & Task Views 2.6.0-J smoke test passed');
+    console.log('Assignment Calendar & Task Views 2.6.0-K smoke test passed');
   } finally {
     if (taskId) await request(`/tasks/${taskId}`, { method:'DELETE' }).catch(()=>{});
     if (projectId) await request(`/projects/${projectId}`, { method:'DELETE' }).catch(()=>{});

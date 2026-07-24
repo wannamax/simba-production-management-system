@@ -15,6 +15,16 @@ import AssignmentWorkCalendar from '../components/AssignmentWorkCalendar';
 
 const { Text } = Typography;
 const productionStatusLabel={PLANNED:'Kế hoạch',IN_PROGRESS:'Đang sản xuất',READY_FOR_DELIVERY:'Sẵn sàng giao',COMPLETED:'Hoàn tất',CANCELLED:'Đã hủy'};
+const sectionHeaderStyle=status=>{
+  const backgrounds={
+    'Chưa bắt đầu':'#ffffff',PLANNED:'#ffffff',NOT_STARTED:'#ffffff',
+    'Đang thực hiện':'#e6f4ff',IN_PROGRESS:'#e6f4ff',IN_PRODUCTION:'#e6f4ff',
+    'Hoàn thành':'#f6ffed',COMPLETED:'#f6ffed',READY_FOR_DELIVERY:'#f6ffed',
+    'Hủy':'#f5f5f5',CANCELLED:'#f5f5f5',
+    'Tạm dừng':'#fffbe6',PAUSED:'#fffbe6',BLOCKED:'#fffbe6',
+  };
+  return {background:backgrounds[status]||'#ffffff',borderRadius:6};
+};
 
 export default function TaskList() {
   const navigate=useNavigate();
@@ -29,7 +39,6 @@ export default function TaskList() {
   const [modalVisible,setModalVisible]=useState(false);
   const [editingTask,setEditingTask]=useState(null);
   const [activeKeys,setActiveKeys]=useState([]);
-  const [sectionExpanded,setSectionExpanded]=useState({});
   const linkedProjectId=Number(searchParams.get('project_id'))||'';
   const linkedStageId=Number(searchParams.get('stage_id'))||undefined;
   const linkedCreateMode=searchParams.get('create');
@@ -45,7 +54,6 @@ export default function TaskList() {
     try{
       const response=await projectAPI.getAll({page:1,limit:1000});
       const rows=response.data||[]; setProjects(rows);
-      setActiveKeys(previous=>previous.length?previous:rows.slice(0,3).map(row=>String(row.id)));
     }catch(error){message.error(`Không thể tải dự án: ${error.message}`);}
   };
   const loadTasks=async()=>{
@@ -200,15 +208,6 @@ export default function TaskList() {
     {label:`Nhân sự dự án (${projectMembers.length})`,options:projectMembers.map(item=>({value:item.id,label:`${item.full_name} — ${item.project_role||item.position||''}`}))},
     {label:`Nhân viên khác (${availableEmployees.length})`,options:availableEmployees.map(item=>({value:item.id,label:`${item.full_name} — ${item.position||item.department||''}`}))},
   ].filter(group=>group.options.length),[projectMembers,availableEmployees]);
-  const isSectionExpanded=(projectId,section,count)=>{
-    const key=`${projectId}-${section}`;
-    return sectionExpanded[key] ?? count>0;
-  };
-  const toggleSection=(projectId,section,count)=>{
-    const key=`${projectId}-${section}`;
-    setSectionExpanded(previous=>({...previous,[key]:!(previous[key] ?? count>0)}));
-  };
-
   const stageTaskColumns=[columns[0],...columns.slice(2)];
   const quantity=value=>Number(value||0).toLocaleString('vi-VN',{maximumFractionDigits:3});
   const productionItemColumns=[
@@ -226,26 +225,30 @@ export default function TaskList() {
       if(!productionOrders.has(stage.production_order_id))productionOrders.set(stage.production_order_id,{...stage,stages:[]});
       productionOrders.get(stage.production_order_id).stages.push(stage);
     }
-    const directExpanded=isSectionExpanded(project.id,'direct',directTasks.length);
-    const fulfillmentExpanded=isSectionExpanded(project.id,'fulfillment',fulfillmentTasks.length);
-    return {key:String(project.id),label:<Space wrap><ProjectOutlined/><strong>{project.project_name}</strong><Tag>{project.project_type||'Chưa phân loại'}</Tag>{project.company_name&&<Text type="secondary">KH: {project.company_name}</Text>}<Badge count={projectTasks.length} showZero color="#1677ff"/></Space>,children:<Card bordered={false}>
-      <Space direction="vertical" style={{width:'100%'}} size={16}>
-        <Card size="small" title={<Space><Tag color="blue">Trực tiếp theo Dự án</Tag><Badge count={directTasks.length} showZero color="#1677ff"/></Space>} extra={<Space size={8}><Button size="small" type="link" onClick={()=>toggleSection(project.id,'direct',directTasks.length)}>{directExpanded?'Thu gọn':'Mở rộng'}</Button><Button size="small" type="primary" icon={<PlusOutlined/>} onClick={()=>openCreate(project.id,null,'PROJECT_DIRECT')}>Tạo nhiệm vụ trực tiếp</Button></Space>}>
-          {directExpanded&&(directTasks.length?<Table rowKey="id" columns={columns} dataSource={directTasks} loading={loading} pagination={false} scroll={{x:1400}}/>:<Text type="secondary">Chưa có nhiệm vụ trực tiếp</Text>)}
-        </Card>
-        <Card size="small" title={<Space><Tag color="cyan">Thực thi Đơn hàng</Tag><Badge count={fulfillmentTasks.length} showZero color="#13c2c2"/></Space>} extra={<Space size={8}><Button size="small" type="link" onClick={()=>toggleSection(project.id,'fulfillment',fulfillmentTasks.length)}>{fulfillmentExpanded?'Thu gọn':'Mở rộng'}</Button><Button size="small" onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Quản lý Đơn hàng / Lệnh SX</Button><Button size="small" icon={<PlusOutlined/>} onClick={()=>openCreate(project.id,null,'ORDER_FULFILLMENT')}>Tạo Giao hàng/Lắp đặt</Button></Space>}>
-          {fulfillmentExpanded&&(fulfillmentTasks.length?<Table rowKey="id" columns={columns} dataSource={fulfillmentTasks} loading={loading} pagination={false} scroll={{x:1400}}/>:<Text type="secondary">Chưa có nhiệm vụ Giao hàng/Lắp đặt theo Đơn hàng</Text>)}
-        </Card>
-        {[...productionOrders.values()].map(production=><Card key={production.production_order_id} size="small" title={<Space wrap><Tag color="geekblue">Lệnh SX ID: {production.production_code}</Tag><strong>{production.group_name||production.process_name}</strong><Text type="secondary">Đơn {production.order_code}</Text><Tag>{productionStatusLabel[production.production_status]||production.production_status}</Tag></Space>} extra={<Button onClick={()=>navigate(`/orders?tab=production&project_id=${project.id}&order_id=${production.order_id}&production_id=${production.production_order_id}`)}>Mở Lệnh SX</Button>}>
-            <Table rowKey="order_item_id" size="small" pagination={false} dataSource={production.production_items||[]} columns={productionItemColumns}/>
-            <Collapse style={{marginTop:10}} items={production.stages.map(stage=>{
-              const stageTasks=projectTasks.filter(task=>task.production_stage_instance_id===stage.id);
-              return {key:String(stage.id),label:<Space wrap><Tag color="purple">{stage.sequence_no}</Tag><strong>{stage.stage_name}</strong><Text type="secondary">{stage.planned_start_date?dayjs(stage.planned_start_date).format('DD/MM/YYYY'):'-'} → {stage.planned_end_date?dayjs(stage.planned_end_date).format('DD/MM/YYYY'):'-'}</Text><Badge count={stageTasks.length} showZero color="#722ed1"/></Space>,extra:<Button size="small" type="primary" icon={<PlusOutlined/>} onClick={event=>{event.stopPropagation();openCreate(project.id,stage.id);}}>Thêm Công việc</Button>,children:stageTasks.length?<Table rowKey="id" columns={stageTaskColumns} dataSource={stageTasks} loading={loading} pagination={false} scroll={{x:1000}}/>:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Công đoạn chưa có Công việc"/>};
-            })}/>
-        </Card>)}
-        {!productionOrders.size&&<Alert type="info" showIcon message="Dự án chưa có Lệnh sản xuất" description={<Button type="link" onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Sang Đơn hàng để tạo Kế hoạch sản xuất</Button>}/>}
-      </Space>
-    </Card>};
+    const productionItems=[...productionOrders.values()].map(production=>({
+      key:String(production.production_order_id),
+      label:<Space wrap><Tag color="geekblue">{production.production_code}</Tag><strong>{production.group_name||production.process_name}</strong><Text type="secondary">Đơn {production.order_code}</Text><Tag>{productionStatusLabel[production.production_status]||production.production_status}</Tag></Space>,
+      styles:{header:sectionHeaderStyle(production.production_status)},
+      children:<Space direction="vertical" size={12} style={{width:'100%'}}>
+        <Table rowKey="order_item_id" size="small" pagination={false} dataSource={production.production_items||[]} columns={productionItemColumns}/>
+        <Collapse size="small" items={production.stages.map(stage=>{
+          const stageTasks=projectTasks.filter(task=>task.production_stage_instance_id===stage.id);
+          return {key:String(stage.id),label:<Space wrap><Tag color="purple">{stage.sequence_no}</Tag><strong>{stage.stage_name}</strong><Text type="secondary">{stage.planned_start_date?dayjs(stage.planned_start_date).format('DD/MM/YYYY'):'-'} → {stage.planned_end_date?dayjs(stage.planned_end_date).format('DD/MM/YYYY'):'-'}</Text><Badge count={stageTasks.length} showZero color="#722ed1"/></Space>,extra:<Button size="small" type="primary" icon={<PlusOutlined/>} onClick={event=>{event.stopPropagation();openCreate(project.id,stage.id);}}>Thêm Công việc</Button>,children:stageTasks.length?<Table rowKey="id" columns={stageTaskColumns} dataSource={stageTasks} loading={loading} pagination={false} scroll={{x:1000}}/>:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Công đoạn chưa có Công việc"/>};
+        })}/>
+      </Space>,
+    }));
+    return {
+      key:String(project.id),
+      label:<Space wrap><ProjectOutlined/><strong>{project.project_name}</strong><Tag>{project.project_type||'Chưa phân loại'}</Tag>{project.company_name&&<Text type="secondary">KH: {project.company_name}</Text>}<Badge count={projectTasks.length} showZero color="#1677ff"/></Space>,
+      styles:{header:sectionHeaderStyle(project.status)},
+      children:<Space direction="vertical" style={{width:'100%'}} size={16}>
+        <Collapse size="small" items={[
+          {key:'direct',label:<Space><Tag color="blue">Trực tiếp theo Dự án</Tag><Badge count={directTasks.length} showZero color="#1677ff"/></Space>,children:directTasks.length?<Table rowKey="id" columns={columns} dataSource={directTasks} loading={loading} pagination={false} scroll={{x:1400}}/>:<Text type="secondary">Chưa có nhiệm vụ trực tiếp</Text>},
+          {key:'fulfillment',label:<Space><Tag color="cyan">Thực thi Đơn hàng</Tag><Badge count={fulfillmentTasks.length} showZero color="#13c2c2"/></Space>,children:fulfillmentTasks.length?<Table rowKey="id" columns={columns} dataSource={fulfillmentTasks} loading={loading} pagination={false} scroll={{x:1400}}/>:<Text type="secondary">Chưa có nhiệm vụ Giao hàng/Lắp đặt theo Đơn hàng</Text>},
+        ]}/>
+        {productionItems.length?<Collapse size="small" items={productionItems}/>:<Alert type="info" showIcon message="Dự án chưa có Lệnh sản xuất" description="Tạo Lệnh tại Hồ sơ sản xuất, sau đó quay lại đây để tạo và giao Công việc theo Công đoạn." action={<Button type="link" onClick={()=>navigate(`/orders?tab=plans&project_id=${project.id}`)}>Hồ sơ sản xuất</Button>}/>}
+      </Space>,
+    };
   });
 
   const crossViewColumns=[
@@ -294,7 +297,7 @@ export default function TaskList() {
       : (employeeItems.length?<Collapse defaultActiveKey={employeeItems.slice(0,3).map(item=>item.key)} items={employeeItems}/>:<Card><Empty description="Chưa có nhân viên được phân công"/></Card>);
 
   return <div>
-    <div className="page-header"><div><h1 style={{marginBottom:4}}>Nhiệm vụ &amp; Phân công</h1><Text type="secondary">2.6.0-J — Công việc sản xuất, trực tiếp theo Dự án và thực thi Đơn hàng</Text></div><Space wrap><Button type="primary" icon={<PlusOutlined/>} onClick={()=>openCreate(null,null,'PROJECT_DIRECT')}>Tạo nhiệm vụ trực tiếp</Button><Button onClick={()=>navigate('/orders')}>Đơn hàng / Kế hoạch SX</Button></Space></div>
+    <div className="page-header"><div><h1 style={{marginBottom:4}}>Nhiệm vụ &amp; Phân công</h1><Text type="secondary">2.6.0-K — Tạo Lệnh tại Hồ sơ sản xuất, sau đó tạo và giao việc theo Công đoạn tại đây</Text></div><Button onClick={()=>navigate('/orders?tab=plans')}>Hồ sơ sản xuất</Button></div>
     <Row gutter={16} style={{marginBottom:20}}><Col xs={12} md={6}><Card><Statistic title="Tổng công việc" value={stats.total}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Chưa bắt đầu" value={stats.pending}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Đang thực hiện" value={stats.active} valueStyle={{color:'#1677ff'}}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Hoàn thành" value={stats.completed} valueStyle={{color:'#52c41a'}}/></Card></Col></Row>
     <Card style={{marginBottom:16}}><Space direction="vertical" size={12} style={{width:'100%'}}>
       <Space wrap><Segmented value={viewMode} onChange={setViewMode} options={[{value:'project',label:'Theo Dự án',icon:<ProjectOutlined/>},{value:'group',label:'Theo Nhóm công việc'},{value:'employee',label:'Theo Nhân viên',icon:<TeamOutlined/>}]}/>{viewMode==='employee'&&<Button onClick={()=>navigate('/employees/availability')}>Mở Tình trạng nhân viên</Button>}</Space>
