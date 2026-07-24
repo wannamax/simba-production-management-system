@@ -7,7 +7,10 @@ BEGIN;
 UPDATE inventory_settings SET allow_negative_stock=false WHERE id=1;
 
 -- A deactivated default warehouse must not prevent choosing another default.
+-- This file is applied by both the PostgreSQL init hook and the backend migration
+-- runner, so remove either version before creating the final index.
 DROP INDEX IF EXISTS uq_warehouses_one_default;
+DROP INDEX IF EXISTS uq_warehouses_one_active_default;
 CREATE UNIQUE INDEX uq_warehouses_one_active_default
   ON warehouses (is_default) WHERE is_default=true AND is_active=true;
 

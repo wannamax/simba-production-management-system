@@ -19,7 +19,16 @@ async function request(path, options = {}) {
   try {
     const health = await request('/health');
     assert.equal(health.response.status, 200);
-    assert.equal(health.body.version, '2.6.0-I');
+    assert.equal(health.body.version, '2.6.0-J');
+
+    const protectedItems = await request('/work-catalog/items?include_inactive=true');
+    for (const code of ['SUPERVISION','DELIVERY','ON_SITE_INSTALLATION']) {
+      const protectedItem = protectedItems.body.data.find(row => row.code === code);
+      assert(protectedItem?.is_system, `Công việc hệ thống ${code} phải tồn tại và được bảo vệ`);
+      assert.equal(protectedItem.is_active, true);
+      const blockedDelete = await request(`/work-catalog/items/${protectedItem.id}`, { method:'DELETE' });
+      assert.equal(blockedDelete.response.status, 409, `${code} không được phép xóa`);
+    }
 
     const group = await request('/work-catalog/groups', {
       method: 'POST', body: JSON.stringify({ code:`SMOKE_${stamp}`, name:`Nhóm kiểm thử ${stamp}` }),
@@ -84,7 +93,25 @@ async function request(path, options = {}) {
     assert(tasks.body.data.every(row => row.work_group_name === 'Văn phòng'));
     assert(tasks.body.data.every(row => row.assignments.some(a => a.employee_id === employee.id)));
 
-    console.log('Project Task Groups & Work Catalog 2.6.0-I smoke test passed');
+    const linkedTask = await request('/tasks', {
+      method:'POST', body:JSON.stringify({
+        project_id:projectId, work_item_id:temporaryItemId, start_date:'2026-07-22', end_date:'2026-07-23',
+        priority:'Trung bình', assignments:[{ employee_id:employee.id, start_date:'2026-07-22', end_date:'2026-07-23' }],
+        notes:'Smoke catalog deletion with linked task',
+      }),
+    });
+    assert.equal(linkedTask.response.status, 201, JSON.stringify(linkedTask.body));
+    taskIds.push(linkedTask.body.data.id);
+
+    const deleteLinkedItem = await request(`/work-catalog/items/${temporaryItemId}`, { method:'DELETE' });
+    assert.equal(deleteLinkedItem.response.status, 200, JSON.stringify(deleteLinkedItem.body));
+    assert.equal(deleteLinkedItem.body.data.cleared_task_count, 1);
+    temporaryItemId = undefined;
+    const detachedTask = await request(`/tasks/${linkedTask.body.data.id}`);
+    assert.equal(detachedTask.response.status, 200, JSON.stringify(detachedTask.body));
+    assert.equal(detachedTask.body.data.work_item_id, null, 'Task phải được gỡ liên kết khi xóa công việc');
+
+    console.log('Project Task Groups & Work Catalog 2.6.0-K smoke test passed');
   } finally {
     for (const id of taskIds) await request(`/tasks/${id}`, { method:'DELETE' }).catch(() => {});
     if (projectId) await request(`/projects/${projectId}`, { method:'DELETE' }).catch(() => {});

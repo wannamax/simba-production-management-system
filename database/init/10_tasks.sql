@@ -407,8 +407,6 @@ BEGIN
             'Cao'
         )
         ON CONFLICT (task_code) DO NOTHING;
-        
-        \echo 'Inserted sample task'
     END IF;
 END $$;
 

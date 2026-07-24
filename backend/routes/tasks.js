@@ -145,6 +145,75 @@ async function validateProductionStage(db,projectId,stageId){
   return result.rows[0];
 }
 
+async function normalizeTaskSource(db,{projectId,stageId,sourceType,orderId,fulfillmentItems,executionType}){
+  const normalizedSource=sourceType||(stageId?'PRODUCTION_STAGE':'PROJECT_DIRECT');
+  if(!['PRODUCTION_STAGE','PROJECT_DIRECT','ORDER_FULFILLMENT'].includes(normalizedSource)){
+    throw Object.assign(new Error('Nguồn nhiệm vụ không hợp lệ'),{status:400});
+  }
+  if(normalizedSource==='PRODUCTION_STAGE'){
+    if(!stageId)throw Object.assign(new Error('Công việc sản xuất phải thuộc một Công đoạn'),{status:400});
+    await validateProductionStage(db,projectId,stageId);
+    return {sourceType:normalizedSource,stageId:Number(stageId),orderId:null,fulfillmentItems:[]};
+  }
+  if(stageId)throw Object.assign(new Error('Nhiệm vụ trực tiếp không được gắn vào Công đoạn sản xuất'),{status:400});
+  if(normalizedSource==='PROJECT_DIRECT'){
+    return {sourceType:normalizedSource,stageId:null,orderId:null,fulfillmentItems:[]};
+  }
+  if(!['DELIVERY','INSTALLATION'].includes(executionType)){
+    throw Object.assign(new Error('Thực thi Đơn hàng chỉ áp dụng cho Công việc Giao hàng hoặc Lắp đặt'),{status:400});
+  }
+  const normalizedOrderId=Number(orderId);
+  if(!Number.isInteger(normalizedOrderId))throw Object.assign(new Error('Cần chọn Đơn hàng cần giao hoặc lắp đặt'),{status:400});
+  const order=await db.query(
+    `SELECT id FROM project_orders
+     WHERE id=$1 AND project_id=$2 AND status<>'CANCELLED'`,
+    [normalizedOrderId,projectId]
+  );
+  if(!order.rowCount)throw Object.assign(new Error('Đơn hàng không thuộc Dự án hoặc đã bị hủy'),{status:400});
+  const rows=Array.isArray(fulfillmentItems)?fulfillmentItems:[];
+  const itemIds=rows.map(row=>Number(row.order_item_id));
+  if(!rows.length||itemIds.some(id=>!Number.isInteger(id))||new Set(itemIds).size!==itemIds.length){
+    throw Object.assign(new Error('Cần chọn ít nhất một hạng mục Đơn hàng với số lượng hợp lệ'),{status:400});
+  }
+  const orderItems=await db.query(
+    `SELECT id,item_name,unit,quantity FROM project_order_items
+     WHERE order_id=$1 AND id=ANY($2::bigint[]) FOR UPDATE`,
+    [normalizedOrderId,itemIds]
+  );
+  if(orderItems.rowCount!==itemIds.length)throw Object.assign(new Error('Có hạng mục không thuộc Đơn hàng đã chọn'),{status:400});
+  const byId=new Map(orderItems.rows.map(item=>[Number(item.id),item]));
+  const normalizedItems=[];
+  for(const row of rows){
+    const item=byId.get(Number(row.order_item_id));
+    const plannedQuantity=Number(row.planned_quantity);
+    if(!(plannedQuantity>0))throw Object.assign(new Error(`${item.item_name}: số lượng phải lớn hơn 0`),{status:400});
+    const allocation=await db.query(
+      `SELECT COALESCE(SUM(link.planned_quantity),0) allocated
+       FROM task_order_fulfillment_items link
+       JOIN tasks task ON task.id=link.task_id
+       WHERE link.order_item_id=$1 AND link.execution_type=$2
+         AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')`,
+      [item.id,executionType]
+    );
+    const remaining=Number(item.quantity)-Number(allocation.rows[0].allocated);
+    if(plannedQuantity>remaining){
+      throw Object.assign(new Error(`${item.item_name}: chỉ còn ${remaining} ${item.unit} chưa được lập nhiệm vụ ${executionType==='DELIVERY'?'Giao hàng':'Lắp đặt'}`),{status:409});
+    }
+    normalizedItems.push({orderItemId:item.id,plannedQuantity});
+  }
+  return {sourceType:normalizedSource,stageId:null,orderId:normalizedOrderId,fulfillmentItems:normalizedItems};
+}
+
+async function saveFulfillmentItems(db,taskId,executionType,items){
+  for(const item of items){
+    await db.query(
+      `INSERT INTO task_order_fulfillment_items(task_id,order_item_id,execution_type,planned_quantity)
+       VALUES($1,$2,$3,$4)`,
+      [taskId,item.orderItemId,executionType,item.plannedQuantity]
+    );
+  }
+}
+
 async function refreshProductionStageFromWorks(db,stageId){
   if(!stageId)return;
   const summary=await db.query(`SELECT stage.id,stage.production_order_id,stage.tracks_quantity,
@@ -245,23 +314,27 @@ async function createAssignedTask(db,payload,userId){
   const {
     project_id,work_item_id,task_type,task_name,description,start_date,end_date,
     estimated_duration,estimated_hours,priority,notify_before_days,notes,assignments,
-    production_stage_instance_id,
+    production_stage_instance_id,task_source_type,order_id,fulfillment_items,
   }=payload;
   validateDateRange(start_date,end_date,'Nhiệm vụ');
   const definition=await resolveTaskDefinition(db,project_id,work_item_id,task_type,task_name);
-  await validateProductionStage(db,project_id,production_stage_instance_id);
+  const source=await normalizeTaskSource(db,{
+    projectId:project_id,stageId:production_stage_instance_id,sourceType:task_source_type,
+    orderId:order_id,fulfillmentItems:fulfillment_items,executionType:definition.executionType,
+  });
   const taskCode=await CodeGenerator.generateTaskCode(definition.taskType,db);
   const result=await db.query(`INSERT INTO tasks (
       task_code,project_id,work_item_id,task_type,task_name,execution_type,description,
       start_date,end_date,estimated_duration,estimated_hours,priority,notify_before_days,notes,
-      created_by,production_stage_instance_id)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,[
+      created_by,production_stage_instance_id,task_source_type,order_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,[
     taskCode,project_id,definition.workItemId,definition.taskType,definition.taskName,definition.executionType,
     description,start_date,end_date,estimated_duration,estimated_hours??definition.defaultEstimatedHours,
-    priority||'Trung bình',notify_before_days||1,notes,userId,production_stage_instance_id||null,
+    priority||'Trung bình',notify_before_days||1,notes,userId,source.stageId,source.sourceType,source.orderId,
   ]);
+  await saveFulfillmentItems(db,result.rows[0].id,definition.executionType,source.fulfillmentItems);
   const assignmentResult=await saveInitialAssignments(db,result.rows[0],assignments,userId);
-  await refreshProductionStageFromWorks(db,production_stage_instance_id);
+  await refreshProductionStageFromWorks(db,source.stageId);
   return {task:assignmentResult.task||result.rows[0],warnings:assignmentResult.warnings,syncedEmployees:assignmentResult.syncedEmployees};
 }
 
@@ -289,7 +362,7 @@ router.get('/', async (req, res, next) => {
         production.id production_order_id,production.production_code,production.status production_status,
         production.planned_start_date production_start_date,production.planned_end_date production_end_date,
         production.group_name production_group_name,production.process_name,plan.plan_code,
-        orders.id order_id,orders.order_code,
+        COALESCE(direct_order.id,orders.id) order_id,COALESCE(direct_order.order_code,orders.order_code) order_code,
         COALESCE((SELECT jsonb_agg(jsonb_build_object(
           'id',ta.id,'employee_id',e.id,'full_name',e.full_name,'position',e.position,
           'department',e.department,'role_in_task',ta.role_in_task,'start_date',ta.start_date,
@@ -300,7 +373,15 @@ router.get('/', async (req, res, next) => {
           'planned_hours',COALESCE((SELECT sum(day.planned_hours) FROM task_assignment_work_days day WHERE day.task_assignment_id=ta.id),0)
         ) ORDER BY e.full_name)
           FROM task_assignments ta JOIN employees e ON e.id=ta.employee_id
-          WHERE ta.task_id=t.id AND ta.is_active=true),'[]'::jsonb) assignments
+          WHERE ta.task_id=t.id AND ta.is_active=true),'[]'::jsonb) assignments,
+        COALESCE((SELECT jsonb_agg(jsonb_build_object(
+          'id',link.id,'order_item_id',source.id,'item_code',source.item_code,
+          'item_name',source.item_name,'unit',source.unit,'order_quantity',source.quantity,
+          'planned_quantity',link.planned_quantity,'completed_quantity',link.completed_quantity
+        ) ORDER BY source.id)
+          FROM task_order_fulfillment_items link
+          JOIN project_order_items source ON source.id=link.order_item_id
+          WHERE link.task_id=t.id),'[]'::jsonb) fulfillment_items
       FROM tasks t
       JOIN projects p ON t.project_id = p.id
       LEFT JOIN customers c ON p.customer_id = c.id
@@ -310,6 +391,7 @@ router.get('/', async (req, res, next) => {
       LEFT JOIN production_orders production ON production.id=stage.production_order_id
       LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
       LEFT JOIN project_orders orders ON orders.id=production.order_id
+      LEFT JOIN project_orders direct_order ON direct_order.id=t.order_id
       WHERE t.deleted_at IS NULL  
         AND p.deleted_at IS NULL
     `;
@@ -472,7 +554,8 @@ router.get('/:id', async (req, res, next) => {
       `SELECT t.*, p.project_name, p.project_code,p.project_type,c.company_name,
         wi.name work_item_name,wg.id work_group_id,wg.name work_group_name,wg.color work_group_color,
         stage.stage_code,stage.stage_name,stage.sequence_no stage_sequence_no,production.production_code,
-        production.group_name production_group_name,production.process_name,plan.plan_code
+        production.group_name production_group_name,production.process_name,plan.plan_code,
+        COALESCE(direct_order.order_code,production_order.order_code) order_code
        FROM tasks t
        JOIN projects p ON t.project_id = p.id
        LEFT JOIN customers c ON p.customer_id = c.id
@@ -481,6 +564,8 @@ router.get('/:id', async (req, res, next) => {
        LEFT JOIN production_stage_instances stage ON stage.id=t.production_stage_instance_id
        LEFT JOIN production_orders production ON production.id=stage.production_order_id
        LEFT JOIN production_plans plan ON plan.id=production.production_plan_id
+       LEFT JOIN project_orders production_order ON production_order.id=production.order_id
+       LEFT JOIN project_orders direct_order ON direct_order.id=t.order_id
        WHERE t.id = $1`,
       [req.params.id]
     );
@@ -529,6 +614,14 @@ router.get('/:id', async (req, res, next) => {
       [req.params.id]
     );
 
+    const fulfillmentItems = await pool.query(
+      `SELECT link.*,source.item_code,source.item_name,source.unit,source.quantity order_quantity
+       FROM task_order_fulfillment_items link
+       JOIN project_order_items source ON source.id=link.order_item_id
+       WHERE link.task_id=$1 ORDER BY source.id`,
+      [req.params.id]
+    );
+
     res.json({
       success: true,
       data: {
@@ -536,6 +629,7 @@ router.get('/:id', async (req, res, next) => {
         locations: locations.rows,
         assignments: assignments.rows,
         reports: reports.rows,
+        fulfillment_items: fulfillmentItems.rows,
       },
     });
   } catch (error) {
@@ -549,6 +643,9 @@ router.post('/batch',validateTask,async(req,res,next)=>{
   if(!errors.isEmpty())return res.status(400).json({success:false,errors:errors.array()});
   const workItemIds=[...new Set((req.body.work_item_ids||[]).map(Number).filter(Number.isInteger))];
   if(!workItemIds.length||workItemIds.length>10)return res.status(400).json({success:false,message:'Chọn từ 1 đến 10 Công việc'});
+  if(req.body.task_source_type==='ORDER_FULFILLMENT'&&workItemIds.length!==1){
+    return res.status(400).json({success:false,message:'Mỗi nhiệm vụ Giao hàng/Lắp đặt chỉ chọn một Công việc hệ thống'});
+  }
   const client=await pool.connect();
   try{
     await client.query('BEGIN');
@@ -624,10 +721,27 @@ router.put('/:id', validateTask, async (req, res, next) => {
       production_stage_instance_id,
     } = req.body;
 
-    const currentTask=await client.query(`SELECT project_id,production_stage_instance_id FROM tasks WHERE id=$1 FOR UPDATE`,[req.params.id]);
+    const currentTask=await client.query(
+      `SELECT project_id,production_stage_instance_id,task_source_type,order_id,execution_type
+       FROM tasks WHERE id=$1 FOR UPDATE`,
+      [req.params.id]
+    );
     if(!currentTask.rowCount)throw Object.assign(new Error('Không tìm thấy nhiệm vụ'),{status:404});
+    const current=currentTask.rows[0];
     const definition = await resolveTaskDefinition(client, project_id, work_item_id, task_type, task_name);
-    await validateProductionStage(client,project_id,production_stage_instance_id);
+    let targetStageId=null;
+    if(current.task_source_type==='PRODUCTION_STAGE'){
+      targetStageId=production_stage_instance_id||current.production_stage_instance_id;
+      await validateProductionStage(client,project_id,targetStageId);
+    }
+    if(current.task_source_type==='ORDER_FULFILLMENT'){
+      if(Number(project_id)!==Number(current.project_id)){
+        throw Object.assign(new Error('Không thể chuyển nhiệm vụ thực thi sang Dự án khác'),{status:409});
+      }
+      if(definition.executionType!==current.execution_type){
+        throw Object.assign(new Error('Không thể đổi loại Giao hàng/Lắp đặt sau khi đã phân bổ hạng mục'),{status:409});
+      }
+    }
     const result = await client.query(
       `UPDATE tasks SET
         project_id = $1,
@@ -657,7 +771,7 @@ router.put('/:id', validateTask, async (req, res, next) => {
         priority || 'Trung bình',
         notify_before_days ?? 1,
         notes,
-        production_stage_instance_id || null,
+        targetStageId,
         req.params.id,
       ]
     );
@@ -670,8 +784,8 @@ router.put('/:id', validateTask, async (req, res, next) => {
       });
     }
 
-    await refreshProductionStageFromWorks(client,currentTask.rows[0].production_stage_instance_id);
-    if(Number(currentTask.rows[0].production_stage_instance_id)!==Number(production_stage_instance_id))await refreshProductionStageFromWorks(client,production_stage_instance_id);
+    await refreshProductionStageFromWorks(client,current.production_stage_instance_id);
+    if(Number(current.production_stage_instance_id)!==Number(targetStageId))await refreshProductionStageFromWorks(client,targetStageId);
 
     await client.query('COMMIT');
     res.json({
@@ -727,6 +841,12 @@ router.patch('/:id/complete', async (req, res, next) => {
         message: 'Không tìm thấy nhiệm vụ',
       });
     }
+    await client.query(
+      `UPDATE task_order_fulfillment_items
+       SET completed_quantity=planned_quantity,updated_at=NOW()
+       WHERE task_id=$1`,
+      [req.params.id]
+    );
     await refreshProductionStageFromWorks(client,result.rows[0].production_stage_instance_id);
 
     // Create notification

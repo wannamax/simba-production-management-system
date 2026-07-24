@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Badge, Button, Card, Col, Collapse, DatePicker, Descriptions, Divider, Empty, Form,
-  Input, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table,
+  Alert, Badge, Button, Card, Checkbox, Col, Collapse, DatePicker, Descriptions, Divider, Empty, Form,
+  Input, InputNumber, Modal, Progress, Radio, Row, Segmented, Select, Space, Statistic, Table,
   Tag, Tooltip, Typography, message,
 } from 'antd';
 import {
@@ -29,12 +29,18 @@ export default function TaskList() {
   const [modalVisible,setModalVisible]=useState(false);
   const [editingTask,setEditingTask]=useState(null);
   const [activeKeys,setActiveKeys]=useState([]);
+  const [sectionExpanded,setSectionExpanded]=useState({});
   const linkedProjectId=Number(searchParams.get('project_id'))||'';
   const linkedStageId=Number(searchParams.get('stage_id'))||undefined;
+  const linkedCreateMode=searchParams.get('create');
+  const linkedOrderId=Number(searchParams.get('order_id'))||undefined;
   const [filters,setFilters]=useState({project_id:linkedProjectId,status:'',is_overdue:false,is_archived:false});
   const [deepLinkHandled,setDeepLinkHandled]=useState(false);
   const [search,setSearch]=useState('');
   const [viewMode,setViewMode]=useState('project');
+  const taskSourceType=Form.useWatch('task_source_type',form);
+  const selectedOrderId=Form.useWatch('order_id',form);
+  const selectedWorkItemIds=Form.useWatch('work_item_ids',form);
   const loadProjects=async()=>{
     try{
       const response=await projectAPI.getAll({page:1,limit:1000});
@@ -56,19 +62,33 @@ export default function TaskList() {
     try{const response=await workCatalogAPI.getProjectContext(projectId);setContext(response.data);return response.data;}
     catch(error){setContext(null);message.error(error.message);return null;}finally{setContextLoading(false);}
   };
-  const openCreate=async (projectId,stageId)=>{
+  const openCreate=async (projectId,stageId,sourceType,orderId)=>{
     setEditingTask(null); form.resetFields(); setModalVisible(true);
     form.setFieldsValue({
       project_id:projectId||undefined,priority:'Trung bình',notify_before_days:1,
       production_stage_instance_id:stageId||undefined,
+      task_source_type:sourceType||(stageId?'PRODUCTION_STAGE':'PROJECT_DIRECT'),
       work_item_ids:[],
       assignments:[{}],
     });
-    if(projectId) await loadContext(projectId); else setContext(null);
+    if(projectId){
+      const data=await loadContext(projectId);
+      if(orderId&&data){
+        const order=(data.orders||[]).find(item=>Number(item.id)===Number(orderId));
+        form.setFieldsValue({
+          order_id:order?.id,
+          fulfillment_items:(order?.items||[]).map(item=>({
+            order_item_id:item.id,selected:false,planned_quantity:undefined,
+          })),
+        });
+      }
+    }else setContext(null);
   };
   useEffect(()=>{
-    if(!deepLinkHandled&&linkedProjectId&&linkedStageId){setDeepLinkHandled(true);openCreate(linkedProjectId,linkedStageId);}
-  },[deepLinkHandled,linkedProjectId,linkedStageId]);
+    if(deepLinkHandled||!linkedProjectId)return;
+    if(linkedStageId){setDeepLinkHandled(true);openCreate(linkedProjectId,linkedStageId,'PRODUCTION_STAGE');}
+    else if(linkedCreateMode==='fulfillment'){setDeepLinkHandled(true);openCreate(linkedProjectId,null,'ORDER_FULFILLMENT',linkedOrderId);}
+  },[deepLinkHandled,linkedProjectId,linkedStageId,linkedCreateMode,linkedOrderId]);
   const openEdit=async record=>{
     setEditingTask(record); setModalVisible(true); await loadContext(record.project_id);
     form.setFieldsValue({
@@ -81,6 +101,8 @@ export default function TaskList() {
       work_item_id:undefined,
       work_item_ids:[],
       production_stage_instance_id:undefined,
+      order_id:undefined,
+      fulfillment_items:[],
       assignments:[{}],
     });
   };
@@ -93,8 +115,17 @@ export default function TaskList() {
   };
   const submit=async values=>{
     const serializeDate=value=>value?.format?.('YYYY-MM-DD')||value||null;
+    const selectedFulfillmentItems=(values.fulfillment_items||[]).filter(row=>row?.selected);
+    if(values.task_source_type==='ORDER_FULFILLMENT'&&!selectedFulfillmentItems.length){
+      message.error('Chọn ít nhất một hạng mục và nhập số lượng Giao hàng/Lắp đặt');
+      return;
+    }
     const payload={
       ...values,
+      fulfillment_items:values.task_source_type==='ORDER_FULFILLMENT'
+        ?selectedFulfillmentItems.map(row=>({
+          order_item_id:row.order_item_id,planned_quantity:row.planned_quantity,
+        })) :[],
       assignments:editingTask?undefined:(values.assignments||[]).filter(row=>row?.employee_id).map(row=>({
         ...row,work_dates:(row.work_dates||[]).map(serializeDate),
       })),
@@ -114,7 +145,11 @@ export default function TaskList() {
   const statusColor=status=>({'Chưa bắt đầu':'default','Đang thực hiện':'processing','Chờ xử lý':'warning','Hoàn thành':'success','Tạm dừng':'orange','Hủy':'error'}[status]||'default');
   const columns=[
     {title:'Công việc',key:'task',width:230,render:(_,record)=><Space direction="vertical" size={0}><a onClick={()=>navigate(`/tasks/${record.id}`)}><strong>{record.task_name}</strong></a><Text type="secondary">{record.task_code}</Text>{record.is_overdue&&<Tag icon={<WarningOutlined/>} color="error">Quá hạn</Tag>}</Space>},
-    {title:'Công đoạn',key:'stage',width:220,render:(_,record)=>record.production_stage_instance_id?<Space direction="vertical" size={0}><Tag color="purple">{record.stage_sequence_no}. {record.stage_name}</Tag><Text type="secondary">{record.production_group_name} · {record.production_code}</Text></Space>:<Text type="secondary">Công việc chung</Text>},
+    {title:'Nguồn công việc',key:'stage',width:230,render:(_,record)=>record.task_source_type==='PRODUCTION_STAGE'||record.production_stage_instance_id
+      ?<Space direction="vertical" size={0}><Tag color="purple">{record.stage_sequence_no}. {record.stage_name}</Tag><Text type="secondary">{record.production_group_name} · {record.production_code}</Text></Space>
+      :record.task_source_type==='ORDER_FULFILLMENT'
+        ?<Space direction="vertical" size={0}><Tag color="cyan">Thực thi Đơn hàng</Tag><Text type="secondary">{record.order_code}</Text></Space>
+        :<Tag color="blue">Trực tiếp theo Dự án</Tag>},
     {title:'Nhóm công việc',dataIndex:'work_group_name',width:140,render:(value,record)=><Tag color={record.work_group_color||'blue'}>{value||record.task_type}</Tag>},
     {title:'Nhân viên',dataIndex:'assignments',width:250,render:rows=>rows?.length?<Space direction="vertical" size={4}>{rows.map(row=><span key={row.id}><TeamOutlined/> {row.full_name} <Text type="secondary">· {Number(row.planned_hours||0)}h</Text></span>)}</Space>:<Text type="secondary">Chưa phân công</Text>},
     {title:'Kế hoạch tự động',key:'dates',width:210,render:(_,record)=><Space direction="vertical" size={0}><span>{record.start_date?dayjs(record.start_date).format('DD/MM/YYYY'):'-'} → {record.end_date?dayjs(record.end_date).format('DD/MM/YYYY'):'-'}</span><Text type="secondary">{record.estimated_duration||0} ngày · {Number(record.estimated_hours||0)} giờ</Text></Space>},
@@ -128,8 +163,7 @@ export default function TaskList() {
     </Space>},
   ];
 
-  const executionTasks=useMemo(()=>tasks.filter(task=>task.production_order_id),[tasks]);
-  const stats={total:executionTasks.length,pending:executionTasks.filter(x=>x.status==='Chưa bắt đầu').length,active:executionTasks.filter(x=>x.status==='Đang thực hiện').length,completed:executionTasks.filter(x=>x.status==='Hoàn thành').length};
+  const stats={total:tasks.length,pending:tasks.filter(x=>x.status==='Chưa bắt đầu').length,active:tasks.filter(x=>x.status==='Đang thực hiện').length,completed:tasks.filter(x=>x.status==='Hoàn thành').length};
   const visibleProjects=useMemo(()=>projects.filter(project=>{
     if(filters.project_id&&project.id!==filters.project_id)return false;
     const needle=search.trim().toLowerCase();
@@ -137,19 +171,43 @@ export default function TaskList() {
   }),[projects,filters.project_id,search]);
   const visibleTasks=useMemo(()=>{
     const needle=search.trim().toLowerCase();
-    return executionTasks.filter(task=>!needle||`${task.task_code} ${task.task_name} ${task.project_name} ${task.company_name||''} ${task.work_group_name||task.task_type||''}`.toLowerCase().includes(needle));
-  },[executionTasks,search]);
+    return tasks.filter(task=>!needle||`${task.task_code} ${task.task_name} ${task.project_name} ${task.company_name||''} ${task.work_group_name||task.task_type||''} ${task.order_code||''}`.toLowerCase().includes(needle));
+  },[tasks,search]);
   const workGroups=useMemo(()=>{
     const map=new Map();
     for(const item of context?.work_items||[]){if(!map.has(item.group_name))map.set(item.group_name,[]);map.get(item.group_name).push(item);}
     return [...map.entries()];
   },[context]);
+  const selectableWorkGroups=useMemo(()=>{
+    if(taskSourceType!=='ORDER_FULFILLMENT')return workGroups;
+    return workGroups.map(([groupName,items])=>[groupName,items.filter(item=>['DELIVERY','INSTALLATION'].includes(item.execution_type))])
+      .filter(([,items])=>items.length);
+  },[workGroups,taskSourceType]);
+  const selectedOrder=useMemo(()=>(context?.orders||[]).find(order=>Number(order.id)===Number(selectedOrderId)),[context,selectedOrderId]);
+  const selectedExecutionType=useMemo(()=>{
+    const selectedId=Array.isArray(selectedWorkItemIds)?selectedWorkItemIds[0]:null;
+    return (context?.work_items||[]).find(item=>Number(item.id)===Number(selectedId))?.execution_type||null;
+  },[context,selectedWorkItemIds]);
+  const changeOrder=orderId=>{
+    const order=(context?.orders||[]).find(item=>Number(item.id)===Number(orderId));
+    form.setFieldValue('fulfillment_items',(order?.items||[]).map(item=>({
+      order_item_id:item.id,selected:false,planned_quantity:undefined,
+    })));
+  };
   const projectMembers=useMemo(()=>(context?.employees||[]).filter(item=>item.is_project_member),[context]);
   const availableEmployees=useMemo(()=>(context?.employees||[]).filter(item=>!item.is_project_member),[context]);
   const employeeOptions=useMemo(()=>[
     {label:`Nhân sự dự án (${projectMembers.length})`,options:projectMembers.map(item=>({value:item.id,label:`${item.full_name} — ${item.project_role||item.position||''}`}))},
     {label:`Nhân viên khác (${availableEmployees.length})`,options:availableEmployees.map(item=>({value:item.id,label:`${item.full_name} — ${item.position||item.department||''}`}))},
   ].filter(group=>group.options.length),[projectMembers,availableEmployees]);
+  const isSectionExpanded=(projectId,section,count)=>{
+    const key=`${projectId}-${section}`;
+    return sectionExpanded[key] ?? count>0;
+  };
+  const toggleSection=(projectId,section,count)=>{
+    const key=`${projectId}-${section}`;
+    setSectionExpanded(previous=>({...previous,[key]:!(previous[key] ?? count>0)}));
+  };
 
   const stageTaskColumns=[columns[0],...columns.slice(2)];
   const quantity=value=>Number(value||0).toLocaleString('vi-VN',{maximumFractionDigits:3});
@@ -159,15 +217,25 @@ export default function TaskList() {
     {title:'Đã hoàn thành',key:'completed',width:190,align:'right',render:(_,row)=><Text strong>{quantity(row.completed_quantity)} / {quantity(row.planned_quantity)} {row.unit}</Text>},
   ];
   const collapseItems=visibleProjects.map(project=>{
-    const projectTasks=executionTasks.filter(task=>task.project_id===project.id);
+    const projectTasks=visibleTasks.filter(task=>task.project_id===project.id);
+    const directTasks=projectTasks.filter(task=>task.task_source_type==='PROJECT_DIRECT'||(!task.production_stage_instance_id&&!task.order_id));
+    const fulfillmentTasks=projectTasks.filter(task=>task.task_source_type==='ORDER_FULFILLMENT');
     const stages=productionStages.filter(stage=>stage.project_id===project.id);
     const productionOrders=new Map();
     for(const stage of stages){
       if(!productionOrders.has(stage.production_order_id))productionOrders.set(stage.production_order_id,{...stage,stages:[]});
       productionOrders.get(stage.production_order_id).stages.push(stage);
     }
-    return {key:String(project.id),label:<Space wrap><ProjectOutlined/><strong>{project.project_name}</strong><Tag>{project.project_type||'Chưa phân loại'}</Tag>{project.company_name&&<Text type="secondary">KH: {project.company_name}</Text>}<Badge count={projectTasks.length} showZero color="#1677ff"/></Space>,children:<Card bordered={false} extra={<Button onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Quản lý Đơn hàng / Lệnh SX</Button>}>
+    const directExpanded=isSectionExpanded(project.id,'direct',directTasks.length);
+    const fulfillmentExpanded=isSectionExpanded(project.id,'fulfillment',fulfillmentTasks.length);
+    return {key:String(project.id),label:<Space wrap><ProjectOutlined/><strong>{project.project_name}</strong><Tag>{project.project_type||'Chưa phân loại'}</Tag>{project.company_name&&<Text type="secondary">KH: {project.company_name}</Text>}<Badge count={projectTasks.length} showZero color="#1677ff"/></Space>,children:<Card bordered={false}>
       <Space direction="vertical" style={{width:'100%'}} size={16}>
+        <Card size="small" title={<Space><Tag color="blue">Trực tiếp theo Dự án</Tag><Badge count={directTasks.length} showZero color="#1677ff"/></Space>} extra={<Space size={8}><Button size="small" type="link" onClick={()=>toggleSection(project.id,'direct',directTasks.length)}>{directExpanded?'Thu gọn':'Mở rộng'}</Button><Button size="small" type="primary" icon={<PlusOutlined/>} onClick={()=>openCreate(project.id,null,'PROJECT_DIRECT')}>Tạo nhiệm vụ trực tiếp</Button></Space>}>
+          {directExpanded&&(directTasks.length?<Table rowKey="id" columns={columns} dataSource={directTasks} loading={loading} pagination={false} scroll={{x:1400}}/>:<Text type="secondary">Chưa có nhiệm vụ trực tiếp</Text>)}
+        </Card>
+        <Card size="small" title={<Space><Tag color="cyan">Thực thi Đơn hàng</Tag><Badge count={fulfillmentTasks.length} showZero color="#13c2c2"/></Space>} extra={<Space size={8}><Button size="small" type="link" onClick={()=>toggleSection(project.id,'fulfillment',fulfillmentTasks.length)}>{fulfillmentExpanded?'Thu gọn':'Mở rộng'}</Button><Button size="small" onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Quản lý Đơn hàng / Lệnh SX</Button><Button size="small" icon={<PlusOutlined/>} onClick={()=>openCreate(project.id,null,'ORDER_FULFILLMENT')}>Tạo Giao hàng/Lắp đặt</Button></Space>}>
+          {fulfillmentExpanded&&(fulfillmentTasks.length?<Table rowKey="id" columns={columns} dataSource={fulfillmentTasks} loading={loading} pagination={false} scroll={{x:1400}}/>:<Text type="secondary">Chưa có nhiệm vụ Giao hàng/Lắp đặt theo Đơn hàng</Text>)}
+        </Card>
         {[...productionOrders.values()].map(production=><Card key={production.production_order_id} size="small" title={<Space wrap><Tag color="geekblue">Lệnh SX ID: {production.production_code}</Tag><strong>{production.group_name||production.process_name}</strong><Text type="secondary">Đơn {production.order_code}</Text><Tag>{productionStatusLabel[production.production_status]||production.production_status}</Tag></Space>} extra={<Button onClick={()=>navigate(`/orders?tab=production&project_id=${project.id}&order_id=${production.order_id}&production_id=${production.production_order_id}`)}>Mở Lệnh SX</Button>}>
             <Table rowKey="order_item_id" size="small" pagination={false} dataSource={production.production_items||[]} columns={productionItemColumns}/>
             <Collapse style={{marginTop:10}} items={production.stages.map(stage=>{
@@ -175,7 +243,7 @@ export default function TaskList() {
               return {key:String(stage.id),label:<Space wrap><Tag color="purple">{stage.sequence_no}</Tag><strong>{stage.stage_name}</strong><Text type="secondary">{stage.planned_start_date?dayjs(stage.planned_start_date).format('DD/MM/YYYY'):'-'} → {stage.planned_end_date?dayjs(stage.planned_end_date).format('DD/MM/YYYY'):'-'}</Text><Badge count={stageTasks.length} showZero color="#722ed1"/></Space>,extra:<Button size="small" type="primary" icon={<PlusOutlined/>} onClick={event=>{event.stopPropagation();openCreate(project.id,stage.id);}}>Thêm Công việc</Button>,children:stageTasks.length?<Table rowKey="id" columns={stageTaskColumns} dataSource={stageTasks} loading={loading} pagination={false} scroll={{x:1000}}/>:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Công đoạn chưa có Công việc"/>};
             })}/>
         </Card>)}
-        {!productionOrders.size&&<Empty description="Dự án chưa có Lệnh sản xuất"><Button type="primary" onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Sang Đơn hàng để tạo Lệnh SX</Button></Empty>}
+        {!productionOrders.size&&<Alert type="info" showIcon message="Dự án chưa có Lệnh sản xuất" description={<Button type="link" onClick={()=>navigate(`/orders?project_id=${project.id}`)}>Sang Đơn hàng để tạo Kế hoạch sản xuất</Button>}/>}
       </Space>
     </Card>};
   });
@@ -226,7 +294,7 @@ export default function TaskList() {
       : (employeeItems.length?<Collapse defaultActiveKey={employeeItems.slice(0,3).map(item=>item.key)} items={employeeItems}/>:<Card><Empty description="Chưa có nhân viên được phân công"/></Card>);
 
   return <div>
-    <div className="page-header"><div><h1 style={{marginBottom:4}}>Nhiệm vụ &amp; Phân công</h1><Text type="secondary">2.6.0-I — Chi tiết thi công được tổ chức theo Lệnh sản xuất</Text></div><Button onClick={()=>navigate('/orders')}>Đơn hàng / Lệnh SX</Button></div>
+    <div className="page-header"><div><h1 style={{marginBottom:4}}>Nhiệm vụ &amp; Phân công</h1><Text type="secondary">2.6.0-J — Công việc sản xuất, trực tiếp theo Dự án và thực thi Đơn hàng</Text></div><Space wrap><Button type="primary" icon={<PlusOutlined/>} onClick={()=>openCreate(null,null,'PROJECT_DIRECT')}>Tạo nhiệm vụ trực tiếp</Button><Button onClick={()=>navigate('/orders')}>Đơn hàng / Kế hoạch SX</Button></Space></div>
     <Row gutter={16} style={{marginBottom:20}}><Col xs={12} md={6}><Card><Statistic title="Tổng công việc" value={stats.total}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Chưa bắt đầu" value={stats.pending}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Đang thực hiện" value={stats.active} valueStyle={{color:'#1677ff'}}/></Card></Col><Col xs={12} md={6}><Card><Statistic title="Hoàn thành" value={stats.completed} valueStyle={{color:'#52c41a'}}/></Card></Col></Row>
     <Card style={{marginBottom:16}}><Space direction="vertical" size={12} style={{width:'100%'}}>
       <Space wrap><Segmented value={viewMode} onChange={setViewMode} options={[{value:'project',label:'Theo Dự án',icon:<ProjectOutlined/>},{value:'group',label:'Theo Nhóm công việc'},{value:'employee',label:'Theo Nhân viên',icon:<TeamOutlined/>}]}/>{viewMode==='employee'&&<Button onClick={()=>navigate('/employees/availability')}>Mở Tình trạng nhân viên</Button>}</Space>
@@ -237,6 +305,17 @@ export default function TaskList() {
     <Modal title={editingTask?'Cập nhật Công việc':`Tạo và phân công Công việc${context?.project?.project_name?` — ${context.project.project_name}`:''}`} open={modalVisible} onCancel={()=>setModalVisible(false)} footer={null} width={1080} destroyOnClose>
       <Form form={form} layout="vertical" onFinish={submit}>
         <Form.Item name="project_id" hidden rules={[{required:true,message:'Chọn dự án'}]}><Input/></Form.Item>
+        <Form.Item name="task_source_type" hidden={Boolean(editingTask)||taskSourceType==='PRODUCTION_STAGE'} label="Loại nhiệm vụ">
+          <Radio.Group buttonStyle="solid" onChange={event=>{
+            form.setFieldsValue({work_item_ids:[],order_id:undefined,fulfillment_items:[],production_stage_instance_id:undefined});
+            if(event.target.value==='ORDER_FULFILLMENT'&&context?.orders?.length===1){
+              form.setFieldValue('order_id',context.orders[0].id);changeOrder(context.orders[0].id);
+            }
+          }}>
+            <Radio.Button value="PROJECT_DIRECT">Trực tiếp theo Dự án</Radio.Button>
+            <Radio.Button value="ORDER_FULFILLMENT">Giao hàng/Lắp đặt theo Đơn hàng</Radio.Button>
+          </Radio.Group>
+        </Form.Item>
         {!context&&<Form.Item label="Chọn dự án để phân công" required><Select showSearch optionFilterProp="label" loading={contextLoading} options={projects.map(x=>({value:x.id,label:`${x.project_code} — ${x.project_name}`}))} onChange={projectId=>{form.setFieldValue('project_id',projectId);changeProject(projectId);}}/></Form.Item>}
         {context&&<Card size="small" title="Thông tin dự án" extra={<Button type="link" onClick={()=>navigate(`/projects/${context.project.id}`)}>Mở dự án để chỉnh sửa</Button>} style={{marginBottom:16}}>
           <Descriptions size="small" column={3}>
@@ -248,10 +327,33 @@ export default function TaskList() {
             <Descriptions.Item label="Trạng thái"><Tag>{context.project.status}</Tag></Descriptions.Item>
           </Descriptions>
         </Card>}
-        {context?.production_stages?.length>0&&<Form.Item name="production_stage_instance_id" label="Công đoạn sản xuất"><Select allowClear showSearch optionFilterProp="label" placeholder="Chọn Công đoạn nếu Công việc thuộc Kế hoạch sản xuất" options={context.production_stages.map(stage=>({value:stage.id,label:`${stage.production_code} · ${stage.sequence_no}. ${stage.stage_name} — ${stage.group_name}`}))}/></Form.Item>}
-        {editingTask?<Form.Item name="work_item_id" label="Công việc thực hiện" rules={!editingTask.work_item_id?[]:[{required:true,message:'Chọn Công việc'}]}><Select showSearch optionFilterProp="label" disabled={!context} loading={contextLoading} onOpenChange={open=>{if(open&&context?.project?.id)loadContext(context.project.id);}} options={workGroups.map(([label,items])=>({label,options:items.map(item=>({value:item.id,label:item.name}))}))} placeholder="Chọn Công việc phù hợp"/></Form.Item>:<Form.Item name="work_item_ids" label="Các Công việc thực hiện" rules={[{required:true,type:'array',min:1,message:'Chọn ít nhất một Công việc'}]} extra="Có thể chọn đồng thời Giám sát, Thiết kế hoặc nhiều Công việc khác; mỗi lựa chọn tạo một Công việc độc lập với cùng nhân viên và lịch đã đánh dấu."><Select mode="multiple" maxTagCount="responsive" showSearch optionFilterProp="label" disabled={!context} loading={contextLoading} onOpenChange={open=>{if(open&&context?.project?.id)loadContext(context.project.id);}} options={workGroups.map(([label,items])=>({label,options:items.map(item=>({value:item.id,label:item.name}))}))} placeholder={context?.work_items?.length?'Chọn một hoặc nhiều Công việc':'Chưa cấu hình Công việc cho Loại dự án'}/></Form.Item>}
+        {(taskSourceType==='PRODUCTION_STAGE'||editingTask?.task_source_type==='PRODUCTION_STAGE')&&context?.production_stages?.length>0&&<Form.Item name="production_stage_instance_id" label="Công đoạn sản xuất" rules={[{required:true,message:'Chọn Công đoạn'}]}><Select showSearch optionFilterProp="label" disabled={Boolean(editingTask)} placeholder="Chọn Công đoạn thuộc Kế hoạch sản xuất" options={context.production_stages.map(stage=>({value:stage.id,label:`${stage.production_code} · ${stage.sequence_no}. ${stage.stage_name} — ${stage.group_name}`}))}/></Form.Item>}
+        {editingTask?<Form.Item name="work_item_id" label="Công việc thực hiện" rules={!editingTask.work_item_id?[]:[{required:true,message:'Chọn Công việc'}]}><Select showSearch optionFilterProp="label" disabled={!context} loading={contextLoading} onOpenChange={open=>{if(open&&context?.project?.id)loadContext(context.project.id);}} options={workGroups.map(([label,items])=>({label,options:items.map(item=>({value:item.id,label:item.name}))}))} placeholder="Chọn Công việc phù hợp"/></Form.Item>:<Form.Item name="work_item_ids" label={taskSourceType==='ORDER_FULFILLMENT'?'Công việc thực thi':'Các Công việc thực hiện'} rules={[{required:true,type:'array',min:1,message:'Chọn ít nhất một Công việc'}]} extra={taskSourceType==='ORDER_FULFILLMENT'?'Chọn Giao hàng hoặc Lắp đặt. Hai loại được lập thành hai nhiệm vụ độc lập.':'Có thể chọn đồng thời Giám sát, Thiết kế hoặc nhiều Công việc khác; mỗi lựa chọn tạo một Công việc độc lập với cùng nhân viên và lịch đã đánh dấu.'}><Select mode="multiple" maxCount={taskSourceType==='ORDER_FULFILLMENT'?1:10} maxTagCount="responsive" showSearch optionFilterProp="label" disabled={!context} loading={contextLoading} onOpenChange={open=>{if(open&&context?.project?.id)loadContext(context.project.id);}} options={selectableWorkGroups.map(([label,items])=>({label,options:items.map(item=>({value:item.id,label:item.name}))}))} placeholder={context?.work_items?.length?'Chọn một hoặc nhiều Công việc':'Chưa cấu hình Công việc cho Loại dự án'}/></Form.Item>}
+        {!editingTask&&taskSourceType==='ORDER_FULFILLMENT'&&<Card size="small" title="Hạng mục cần Giao hàng/Lắp đặt" style={{marginBottom:16}}>
+          <Form.Item name="order_id" label="Đơn hàng" rules={[{required:true,message:'Chọn Đơn hàng'}]}>
+            <Select showSearch optionFilterProp="label" placeholder="Chọn Đơn hàng có sản phẩm tồn hoặc đã sẵn sàng" options={(context?.orders||[]).map(order=>({value:order.id,label:`${order.order_code} · ${order.items?.length||0} hạng mục`}))} onChange={changeOrder}/>
+          </Form.Item>
+          {!context?.orders?.length&&<Alert type="warning" showIcon message="Dự án chưa có Đơn hàng" description="Hãy tạo Đơn hàng trước khi lập nhiệm vụ Giao hàng/Lắp đặt theo hạng mục."/>}
+          {selectedOrder&&<Form.List name="fulfillment_items">{fields=><Space direction="vertical" style={{width:'100%'}} size={8}>
+            {fields.map((field,index)=>{
+              const item=selectedOrder.items?.[index];
+              const allocated=Number(selectedExecutionType==='INSTALLATION'?item?.installation_allocated_quantity:item?.delivery_allocated_quantity)||0;
+              const remaining=Math.max(0,Number(item?.quantity||0)-allocated);
+              return <Card key={field.key} size="small">
+                <Form.Item {...field} name={[field.name,'order_item_id']} hidden><Input/></Form.Item>
+                <Row gutter={12} align="middle">
+                  <Col span={14}><Form.Item {...field} name={[field.name,'selected']} valuePropName="checked" style={{margin:0}}><Checkbox disabled={!selectedExecutionType||remaining<=0}><strong>{item?.item_name}</strong> · {Number(item?.quantity||0).toLocaleString('vi-VN')} {item?.unit}<br/><Text type="secondary">Đã lập {allocated.toLocaleString('vi-VN')} · Còn {remaining.toLocaleString('vi-VN')} {item?.unit}</Text></Checkbox></Form.Item></Col>
+                  <Col span={10}><Form.Item {...field} name={[field.name,'planned_quantity']} label="Số lượng thực thi" dependencies={[[field.name,'selected']]} rules={[{validator:(_,value)=>{
+                    const selected=form.getFieldValue(['fulfillment_items',field.name,'selected']);
+                    if(!selected)return Promise.resolve();
+                    return Number(value)>0&&Number(value)<=remaining?Promise.resolve():Promise.reject(new Error(`Nhập từ 0 đến ${remaining}`));
+                  }}]}><InputNumber min={0.001} max={remaining} precision={3} style={{width:'100%'}} addonAfter={item?.unit}/></Form.Item></Col>
+                </Row>
+              </Card>;
+            })}
+          </Space>}</Form.List>}
+        </Card>}
         {editingTask&&!editingTask.work_item_id&&<><Alert type="warning" showIcon message="Task cũ chưa liên kết Danh mục công việc" style={{marginBottom:12}}/><Row gutter={16}><Col span={12}><Form.Item name="task_type" label="Nhóm cũ" rules={[{required:true}]}><Input/></Form.Item></Col><Col span={12}><Form.Item name="task_name" label="Tên công việc cũ" rules={[{required:true}]}><Input/></Form.Item></Col></Row></>}
-        {context&&<Alert showIcon type="info" message={`${context.production_stages?.length||0} Công đoạn · ${context.work_items.length} Công việc phù hợp · ${projectMembers.length} nhân sự dự án`} description="Công đoạn là khung Quy trình; Công việc và lịch nhân sự được tạo tại đây. Nếu không thuộc sản xuất, có thể để trống Công đoạn." style={{marginBottom:16}}/>}
         <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2}/></Form.Item>
         <Row gutter={16}><Col span={8}><Form.Item name="priority" label="Ưu tiên"><Select options={['Thấp','Trung bình','Cao','Khẩn cấp'].map(value=>({value,label:value}))}/></Form.Item></Col><Col span={8}><Form.Item name="notify_before_days" label="Nhắc trước (ngày)"><Select options={[0,1,2,3,5,7].map(value=>({value,label:`${value} ngày`}))}/></Form.Item></Col></Row>
         {!editingTask&&<><Divider orientation="left">Nhân viên và lịch làm việc</Divider><Form.List name="assignments">{(fields,{add,remove})=><Space direction="vertical" style={{width:'100%'}} size={12}>{fields.map(field=>{

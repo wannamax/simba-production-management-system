@@ -58,15 +58,19 @@ export default function OrderList() {
   const [context, setContext] = useState(null);
   const [groupProcesses, setGroupProcesses] = useState({});
   const [planDetail, setPlanDetail] = useState(null);
+  const [productionPlanTarget, setProductionPlanTarget] = useState(null);
   const [productionDetail, setProductionDetail] = useState(null);
   const [productionRows, setProductionRows] = useState([]);
   const [productionLoading, setProductionLoading] = useState(false);
+  const [planRows, setPlanRows] = useState([]);
+  const [planLoading, setPlanLoading] = useState(false);
   const [outputTarget, setOutputTarget] = useState(null);
   const [editingStage, setEditingStage] = useState(null);
   const [detailTab, setDetailTab] = useState('order');
   const [adjustment, setAdjustment] = useState(null);
   const [editingProduction, setEditingProduction] = useState(null);
-  const workspaceTab = searchParams.get('tab') === 'production' ? 'production' : 'orders';
+  const [historySnapshot, setHistorySnapshot] = useState(null);
+  const workspaceTab = ['orders', 'plans', 'production'].includes(searchParams.get('tab')) ? searchParams.get('tab') : 'orders';
   const projectFilter = searchParams.get('project_id') || '';
   const linkedOrderId = searchParams.get('order_id') || '';
   const linkedProductionId = searchParams.get('production_id') || '';
@@ -117,6 +121,14 @@ export default function OrderList() {
   useEffect(() => {
     if (workspaceTab === 'production') loadProductionOrders();
   }, [workspaceTab, projectFilter, linkedOrderId, productionStatusFilter, productionFromDate, productionToDate, productionSortBy, productionSortDir]);
+  useEffect(() => {
+    if (!['plans', 'production'].includes(workspaceTab)) return;
+    setPlanLoading(true);
+    productionPlanAPI.getAll({ project_id: projectFilter || undefined, order_id: linkedOrderId || undefined })
+      .then(response => setPlanRows(response.data || []))
+      .catch(error => message.error(error.message))
+      .finally(() => setPlanLoading(false));
+  }, [workspaceTab, projectFilter, linkedOrderId]);
   useEffect(() => {
     if (workspaceTab !== 'production') { setProductionDetail(null); return; }
     if (!linkedProductionId) { setProductionDetail(null); return; }
@@ -229,7 +241,7 @@ export default function OrderList() {
     try {
       const response = await productionWorkflowAPI.getContext(order.id);
       const data = response.data;
-      setContext(data); setGroupProcesses({}); planForm.resetFields();
+      setContext(data); setGroupProcesses({}); setProductionPlanTarget(null); planForm.resetFields();
       const projectHasDates = data.order.project_start_date && data.order.project_end_date;
       planForm.setFieldsValue({
         order_id: order.id,
@@ -238,6 +250,17 @@ export default function OrderList() {
         planned_end_date: dateValue(order.expected_delivery_date) || dateValue(data.order.project_end_date),
         global_assignments: [], groups: [blankGroup(data.order.items)],
       });
+      setPlanModal(true);
+    } catch (error) { message.error(error.message); }
+  };
+  const openProductionOrder = async plan => {
+    try {
+      const response = await productionWorkflowAPI.getContext(plan.order_id);
+      const data = response.data;
+      setContext(data); setGroupProcesses({});
+      setProductionPlanTarget(plan);
+      planForm.resetFields();
+      planForm.setFieldsValue({ order_id: data.id, time_mode: 'PHASE', planned_start_date: dateValue(plan.planned_start_date), planned_end_date: dateValue(plan.planned_end_date), global_assignments: [], groups: [blankGroup(data.items)] });
       setPlanModal(true);
     } catch (error) { message.error(error.message); }
   };
@@ -291,7 +314,7 @@ export default function OrderList() {
           start_date: stage.start_date?.format?.('YYYY-MM-DD') || null,
           end_date: stage.end_date?.format?.('YYYY-MM-DD') || null,
         })),
-        group_name: group.group_name || `Nhóm sản xuất ${index + 1}`,
+            group_name: group.group_name || `Lệnh sản xuất ${index + 1}`,
       }));
       if (groups.some(group => !group.items.length)) throw new Error('Mỗi Nhóm sản xuất cần chọn ít nhất một hạng mục');
       const payload = {
@@ -300,10 +323,12 @@ export default function OrderList() {
         planned_end_date: values.planned_end_date?.format('YYYY-MM-DD') || null,
         global_assignments: serializeAssignments(values.global_assignments),
       };
-      const response = await productionPlanAPI.create(payload);
+      const response = productionPlanTarget
+        ? await productionWorkflowAPI.createOrder({ order_id: context.order.id, production_plan_id: productionPlanTarget.id, process_id: groups[0].process_id, items: groups[0].items, stages: groups[0].stages, global_assignments: payload.global_assignments, planned_start_date: payload.planned_start_date, planned_end_date: payload.planned_end_date, notes: values.notes })
+        : await productionPlanAPI.create(payload);
       const firstProduction=response.data?.groups?.[0];
-      message.success(response.message);setPlanModal(false);setDetail(null);await load();
-      updateWorkspaceQuery({tab:'production',project_id:context?.order?.project_id,order_id:context?.order?.id,production_id:firstProduction?.id||''});
+      message.success(response.message);setPlanModal(false);setDetail(null);setProductionPlanTarget(null);await load();
+      updateWorkspaceQuery({tab:'production',project_id:context?.order?.project_id,order_id:context?.order?.id,production_id:firstProduction?.id||response.data?.id||''});
     } catch (error) { message.error(error.message); }
     finally { setSavingPlan(false); }
   };
@@ -334,13 +359,25 @@ export default function OrderList() {
     } catch (error) { message.error(error.message); }
   };
   const cancelGroup = group => Modal.confirm({
-    title: `Hủy Nhóm sản xuất ${group.group_name}?`,
+    title: `Hủy Lệnh sản xuất ${group.group_name}?`,
     content: 'Các Công việc thuộc Công đoạn sẽ được hủy và toàn bộ số lượng của Nhóm sẽ trả về Đơn hàng. Không xóa lịch sử sản lượng.',
-    okText: 'Hủy Nhóm và trả số lượng', okButtonProps: { danger: true },
+    okText: 'Hủy Lệnh và trả số lượng', okButtonProps: { danger: true },
     onOk: async () => {
       const response=await productionPlanAPI.cancelGroup(group.id,'Hủy Nhóm sản xuất từ màn hình Đơn hàng');message.success(response.message);
       if(planDetail?.id)await showPlan(planDetail.id);
       if(Number(linkedProductionId)===Number(group.id)){setProductionDetail(null);updateWorkspaceQuery({production_id:''});}
+      await Promise.all([load(),loadProductionOrders()]);
+    },
+  });
+  const purgeCancelledGroup = group => Modal.confirm({
+    title: `Dọn Lệnh đã hủy ${group.production_code}?`,
+    content: 'Lệnh SX đã hủy sẽ được xóa khỏi danh sách vận hành. Snapshot và ghi chú vẫn nằm trong Lịch sử thực hiện đơn hàng.',
+    okText: 'Dọn khỏi danh sách', okButtonProps: { danger: true },
+    onOk: async () => {
+      const response=await productionPlanAPI.purgeCancelledGroup(group.id,'Dọn Lệnh SX đã hủy khỏi danh sách vận hành');message.success(response.message);
+      if(Number(linkedProductionId)===Number(group.id)){setProductionDetail(null);updateWorkspaceQuery({production_id:''});}
+      if(planDetail?.id)await showPlan(planDetail.id);
+      if(detail?.id)await openDetail(detail.id,'execution');
       await Promise.all([load(),loadProductionOrders()]);
     },
   });
@@ -349,6 +386,18 @@ export default function OrderList() {
     content: 'Tất cả Nhóm và Công việc bên trong sẽ được hủy; số lượng được trả về Đơn hàng để lập kế hoạch lại.',
     okText: 'Hủy toàn bộ Kế hoạch', okButtonProps: { danger: true },
     onOk: async () => { const response = await productionPlanAPI.cancel(plan.id, 'Hủy toàn bộ Kế hoạch từ màn hình Đơn hàng'); message.success(response.message); setPlanDetail(null); await load(); },
+  });
+  const purgeCancelledPlan = plan => Modal.confirm({
+    title: `Dọn Kế hoạch đã hủy ${plan.plan_code}?`,
+    content: 'Tất cả Lệnh SX đã hủy bên trong Kế hoạch sẽ được dọn khỏi danh sách vận hành. Lịch sử thực hiện và snapshot vẫn được giữ trong Đơn hàng.',
+    okText: 'Dọn Kế hoạch đã hủy', okButtonProps: { danger: true },
+    onOk: async () => {
+      const response = await productionPlanAPI.purgeCancelledPlan(plan.id, 'Dọn Kế hoạch đã hủy khỏi danh sách vận hành');
+      message.success(response.message);
+      setPlanDetail(null);setProductionDetail(null);updateWorkspaceQuery({production_id:''});
+      await Promise.all([load(),loadProductionOrders()]);
+      if(response.data?.order_id)await openDetail(response.data.order_id,'execution');
+    },
   });
   const completeProduction = async id => {
     try { const response = await productionWorkflowAPI.updateStatus(id, 'COMPLETED'); message.success(response.message); await showProduction(id); await Promise.all([load(),loadProductionOrders()]); }
@@ -375,6 +424,7 @@ export default function OrderList() {
     { title: 'Hạng mục', dataIndex: 'item_count', width: 100 },
     { title: 'Giá trị', dataIndex: 'total_amount', align: 'right', render: money },
     { title: 'Lệnh SX', dataIndex: 'production_order_count', width: 90, render: value => <Badge count={value} showZero color="#1677ff" /> },
+    { title: 'Giao/Lắp', dataIndex: 'fulfillment_task_count', width: 90, render: value => <Badge count={value} showZero color="#13c2c2" /> },
     { title: 'Trạng thái', dataIndex: 'status', render: value => <Tag color={orderStatus[value]?.[1]}>{orderStatus[value]?.[0] || value}</Tag> },
     { title: 'Thao tác', width: 560, render: (_, row) => <Space wrap><Button icon={<EyeOutlined />} onClick={() => openDetail(row.id)}>Mở</Button><Button onClick={() => openProductionList(row)}>Danh sách Lệnh liên quan</Button>{['NOT_STARTED', 'IN_PRODUCTION'].includes(row.status) && <Button type="primary" icon={<ToolOutlined />} disabled={row.has_remaining_quantity===false} title={row.has_remaining_quantity===false?'Đã lập Kế hoạch đủ số lượng':''} onClick={() => openPlan(row)}>Tạo Kế hoạch sản xuất</Button>}{row.status !== 'CANCELLED' && <Button danger onClick={() => cancelOrder(row)}>Hủy</Button>}<Button danger icon={<DeleteOutlined />} onClick={() => deleteOrder(row)}>Xóa</Button></Space> },
   ];
@@ -385,7 +435,27 @@ export default function OrderList() {
     {title:'Thời gian',key:'dates',width:190,render:(_,row)=><Text>{formatDate(row.planned_start_date)} – {formatDate(row.planned_end_date)}</Text>},
     {title:'Tiến độ',dataIndex:'progress',width:150,render:value=><Progress percent={Math.round(Number(value||0))} size="small"/>},
     {title:'Trạng thái',dataIndex:'status',width:145,render:value=><Tag color={productionStatus[value]?.[1]}>{productionStatus[value]?.[0]||value}</Tag>},
-    {title:'Thao tác',width:225,fixed:'right',render:(_,row)=><Space><Button size="small" type="primary" onClick={()=>showProduction(row.id)}>Mở</Button>{!['COMPLETED','CANCELLED'].includes(row.status)&&<Button size="small" onClick={()=>openProductionEdit(row)}>Sửa</Button>}{!['COMPLETED','CANCELLED'].includes(row.status)&&<Button size="small" danger onClick={()=>cancelGroup(row)}>Hủy</Button>}</Space>},
+    {title:'Thao tác',width:330,fixed:'right',render:(_,row)=><Space wrap><Button size="small" type="primary" onClick={()=>showProduction(row.id)}>Mở</Button>{!['COMPLETED','CANCELLED'].includes(row.status)&&<Button size="small" onClick={()=>openProductionEdit(row)}>Sửa</Button>}{!['COMPLETED','CANCELLED'].includes(row.status)&&<Button size="small" danger onClick={()=>cancelGroup(row)}>Hủy</Button>}{row.status==='CANCELLED'&&<Button size="small" danger icon={<DeleteOutlined/>} onClick={()=>purgeCancelledGroup(row)}>Dọn Lệnh</Button>}{row.status==='CANCELLED'&&row.production_plan_id&&<Button size="small" danger onClick={()=>purgeCancelledPlan({id:row.production_plan_id,plan_code:row.plan_code,order_id:row.order_id})}>Dọn Kế hoạch</Button>}</Space>},
+  ];
+  const planColumns = [
+    { title: 'Kế hoạch sản xuất', key: 'plan', render: (_, row) => <Space direction="vertical" size={0}><a onClick={() => showPlan(row.id)}><strong>{row.plan_code}</strong></a><Text type="secondary">{formatDate(row.planned_start_date)} – {formatDate(row.planned_end_date)}</Text></Space> },
+    { title: 'Dự án / Đơn hàng', key: 'source', render: (_, row) => <Space direction="vertical" size={0}><Text strong>{row.project_name}</Text><Text type="secondary">{row.project_code} · {row.order_code}</Text></Space> },
+    { title: 'Số Lệnh sản xuất', dataIndex: 'group_count', width: 150, render: value => <Badge count={value} showZero color="#1677ff" /> },
+    { title: 'Trạng thái', dataIndex: 'status', width: 150, render: value => <Tag color={productionStatus[value]?.[1]}>{productionStatus[value]?.[0] || value}</Tag> },
+    { title: 'Thao tác', width: 240, render: (_, row) => <Space wrap><Button size="small" type="primary" onClick={() => showPlan(row.id)}>Mở Kế hoạch</Button>{row.status === 'CANCELLED' && <Button size="small" danger onClick={() => purgeCancelledPlan(row)}>Dọn Kế hoạch</Button>}</Space> },
+  ];
+  const productionSnapshotItems = snapshot => snapshot?.items?.length ? <Table rowKey="id" size="small" pagination={false} dataSource={snapshot.items} columns={[
+    {title:'Hạng mục',dataIndex:'item_name'},
+    {title:'Số lượng',width:150,align:'right',render:(_,row)=>`${Number(row.planned_quantity)} ${row.unit}`},
+  ]}/> : <Empty description="Không có hạng mục trong snapshot"/>;
+  const executionColumns = [
+    {title:'Date',dataIndex:'event_at',width:160,render:value=>value?dayjs(value).format('DD/MM/YYYY HH:mm'):'-'},
+    {title:'Sự kiện',dataIndex:'event_summary',render:(value,row)=><Space direction="vertical" size={0}>
+      {row.production_order_snapshot?<a onClick={()=>setHistorySnapshot(row.production_order_snapshot)}>{value}</a>:<Text strong>{value}</Text>}
+      {row.production_order_snapshot?.production_code&&<Text type="secondary">Bấm để xem popup Lệnh SX</Text>}
+    </Space>},
+    {title:'Hệ thống',dataIndex:'system_note',render:value=>value||'-'},
+    {title:'Người thực hiện',dataIndex:'performed_by_name',width:160,render:value=>value||'Hệ thống'},
   ];
 
   const orderWorkspace = <>
@@ -407,15 +477,26 @@ export default function OrderList() {
         <Col xs={24} md={9}><Text type="secondary">Khoảng thời gian</Text><DatePicker.RangePicker format="DD/MM/YYYY" style={{width:'100%',marginTop:6}} value={productionFromDate&&productionToDate?[dayjs(productionFromDate),dayjs(productionToDate)]:null} onChange={values=>updateWorkspaceQuery({from_date:values?.[0]?.format('YYYY-MM-DD')||'',to_date:values?.[1]?.format('YYYY-MM-DD')||'',production_id:''})}/></Col>
         <Col xs={16} md={7}><Text type="secondary">Sắp xếp</Text><Select style={{width:'100%',marginTop:6}} value={productionSortBy} options={[{value:'project',label:'Theo Dự án'},{value:'start_date',label:'Theo thời gian bắt đầu'},{value:'status',label:'Theo Trạng thái'},{value:'created_at',label:'Theo thời gian tạo'},{value:'production_code',label:'Theo mã Lệnh SX'}]} onChange={value=>updateWorkspaceQuery({sort_by:value})}/></Col>
         <Col xs={8} md={4}><Text type="secondary">Thứ tự</Text><Select style={{width:'100%',marginTop:6}} value={productionSortDir} options={[{value:'asc',label:'Tăng dần'},{value:'desc',label:'Giảm dần'}]} onChange={value=>updateWorkspaceQuery({sort_dir:value})}/></Col>
-        <Col xs={24} md={13}><Space wrap><Button onClick={()=>updateWorkspaceQuery({project_id:'',order_id:'',production_id:'',production_status:'',from_date:'',to_date:'',sort_by:'start_date',sort_dir:'asc'})}>Xóa bộ lọc</Button><Button type="primary" icon={<ToolOutlined/>} disabled={!canCreatePlan} onClick={openStart}>Tạo Kế hoạch sản xuất</Button></Space></Col>
+        <Col xs={24} md={13}><Space wrap><Button onClick={()=>updateWorkspaceQuery({project_id:'',order_id:'',production_id:'',production_status:'',from_date:'',to_date:'',sort_by:'start_date',sort_dir:'asc'})}>Xóa bộ lọc</Button></Space></Col>
       </Row>
     </Card>
     <Card title={`Danh sách Lệnh sản xuất (${productionRows.length})`}><Table rowKey="id" loading={productionLoading} dataSource={productionRows} columns={productionColumns} scroll={{x:1400}}/></Card>
     {productionDetail&&<Card title={<Space><strong>{productionDetail.production_code}</strong><Tag color={productionStatus[productionDetail.status]?.[1]}>{productionStatus[productionDetail.status]?.[0]}</Tag></Space>} extra={<Button onClick={()=>updateWorkspaceQuery({production_id:''})}>Đóng chi tiết</Button>}>
       <Descriptions bordered size="small" column={3}><Descriptions.Item label="Dự án">{productionDetail.project_name}</Descriptions.Item><Descriptions.Item label="Đơn hàng">{productionDetail.order_code}</Descriptions.Item><Descriptions.Item label="Khách hàng">{productionDetail.company_name||'-'}</Descriptions.Item><Descriptions.Item label="Nhóm">{productionDetail.group_name||'-'}</Descriptions.Item><Descriptions.Item label="Quy trình">{productionDetail.process_name}</Descriptions.Item><Descriptions.Item label="Phiên bản">v{productionDetail.process_version}</Descriptions.Item></Descriptions>
       <Divider orientation="left">Công đoạn và sản lượng</Divider><Space direction="vertical" style={{width:'100%'}}>{productionDetail.stages.map(stage=><Card key={stage.id} size="small" title={`${stage.sequence_no}. ${stage.stage_name}`} extra={<Tag color={stageStatus[stage.status]?.[1]}>{stageStatus[stage.status]?.[0]||stage.status}</Tag>}><Space wrap style={{marginBottom:10}}>{stage.works?.length?stage.works.map(work=><a key={work.id} href={`/tasks/${work.id}`}>{work.task_name}</a>):<Text type="secondary">Chưa có Công việc — hãy thêm trong trang Nhiệm vụ</Text>}<Button size="small" type="primary" href={`/tasks?project_id=${productionDetail.project_id}&stage_id=${stage.id}`}>Thêm Công việc</Button></Space><Table rowKey="id" pagination={false} dataSource={stage.items||[]} columns={[{title:'Hạng mục',dataIndex:'item_name'},{title:'Kế hoạch',render:(_,row)=>`${Number(row.planned_quantity)} ${row.unit}`},{title:'Đạt',dataIndex:'good_quantity'},{title:'Lỗi',dataIndex:'defect_quantity'},{title:'Làm lại',dataIndex:'rework_quantity'},{title:'Tiến độ',render:(_,row)=><Progress percent={Math.round(100*Number(row.good_quantity)/Number(row.planned_quantity))} size="small"/>},{title:'',render:(_,row)=><Button size="small" type="primary" disabled={Number(row.good_quantity)>=Number(row.planned_quantity)} onClick={()=>{setOutputTarget(row);outputForm.setFieldsValue({output_date:dayjs(),good_quantity:Number(row.planned_quantity)-Number(row.good_quantity),defect_quantity:0,rework_quantity:0});}}>Ghi sản lượng</Button>}]} /></Card>)}</Space>
-      {productionDetail.status==='READY_FOR_DELIVERY'&&<Button type="primary" style={{marginTop:16}} onClick={()=>completeProduction(productionDetail.id)}>Hoàn tất Lệnh sản xuất</Button>}
+      <Space style={{marginTop:16}} wrap>
+        {productionDetail.status==='READY_FOR_DELIVERY'&&<Button type="primary" onClick={()=>completeProduction(productionDetail.id)}>Hoàn tất Lệnh sản xuất</Button>}
+        {productionDetail.status==='CANCELLED'&&<Button danger icon={<DeleteOutlined/>} onClick={()=>purgeCancelledGroup(productionDetail)}>Dọn Lệnh đã hủy</Button>}
+        {productionDetail.status==='CANCELLED'&&productionDetail.production_plan_id&&<Button danger onClick={()=>purgeCancelledPlan({id:productionDetail.production_plan_id,plan_code:productionDetail.plan_code,order_id:productionDetail.order_id})}>Dọn Kế hoạch đã hủy</Button>}
+        <Button onClick={()=>openDetail(productionDetail.order_id,'execution')}>Mở Lịch sử thực hiện đơn hàng</Button>
+      </Space>
     </Card>}
+  </Space>;
+  const planWorkspace = <Space direction="vertical" size={16} style={{width:'100%'}}>
+    <Space><Button type="primary" icon={<ToolOutlined />} disabled={!canCreatePlan} onClick={openStart}>Tạo Kế hoạch sản xuất</Button></Space>
+    <Card title={`Danh sách Kế hoạch sản xuất (${planRows.length})`}>
+      <Table rowKey="id" loading={planLoading} dataSource={planRows} columns={planColumns} scroll={{x:1000}} />
+    </Card>
   </Space>;
 
   const AssignmentFields = ({ field, global = false }) => <>
@@ -429,11 +510,12 @@ export default function OrderList() {
 
   return <div>
     <div className="page-header">
-      <div><h1 style={{ marginBottom: 4 }}>Đơn hàng &amp; Sản xuất</h1><Text type="secondary">2.6.0-I — Order Workspace &amp; Production Order Control</Text></div>
-      <Space><Button icon={<PlusOutlined />} onClick={openNew}>Tạo đơn hàng</Button><Button type="primary" icon={<ToolOutlined />} disabled={!canCreatePlan} onClick={openStart}>Tạo Kế hoạch sản xuất</Button></Space>
+      <div><h1 style={{ marginBottom: 4 }}>Đơn hàng &amp; Sản xuất</h1><Text type="secondary">2.6.0-J — Đơn hàng, Kế hoạch sản xuất và thực thi Giao/Lắp</Text></div>
+      <Space><Button icon={<PlusOutlined />} onClick={openNew}>Tạo đơn hàng</Button>{workspaceTab === 'plans' && <Button type="primary" icon={<ToolOutlined />} disabled={!canCreatePlan} onClick={openStart}>Tạo Kế hoạch sản xuất</Button>}{workspaceTab === 'production' && <Button type="primary" icon={<PlusOutlined />} disabled={!planRows.some(plan => plan.status !== 'CANCELLED')} onClick={() => { const activePlans = planRows.filter(item => item.status !== 'CANCELLED'); if (activePlans.length === 1) openProductionOrder(activePlans[0]); else { message.info('Hãy mở một Kế hoạch sản xuất để tạo Lệnh cụ thể'); updateWorkspaceQuery({tab:'plans'}); } }}>Tạo Lệnh sản xuất</Button>}</Space>
     </div>
-    <Tabs size="large" activeKey={workspaceTab} onChange={key=>updateWorkspaceQuery(key==='orders'?{tab:key,order_id:'',production_id:''}:{tab:key})} items={[
+    <Tabs size="large" activeKey={workspaceTab} onChange={key=>updateWorkspaceQuery(key==='orders'?{tab:key,order_id:'',production_id:''}:{tab:key,production_id:''})} items={[
       {key:'orders',label:`Đơn hàng (${rows.length})`,children:orderWorkspace},
+      {key:'plans',label:<Space>Kế hoạch sản xuất<Badge count={planRows.length} showZero color="#722ed1" /></Space>,children:planWorkspace},
       {key:'production',label:<Space>Danh sách Lệnh sản xuất<Badge count={productionRows.length} showZero color="#1677ff"/></Space>,children:productionWorkspace},
     ]}/>
 
@@ -469,6 +551,8 @@ export default function OrderList() {
             <Table rowKey="id" pagination={false} dataSource={detail.items} columns={[
               {title:'Mã',dataIndex:'item_code',width:110},{title:'Tên hạng mục',dataIndex:'item_name'},
               {title:'ĐVT',dataIndex:'unit',width:90},{title:'Số lượng gốc',dataIndex:'quantity',align:'right',width:130},
+              {title:'Giao hàng',width:150,render:(_,row)=><Text>{Number(row.delivery_completed_quantity||0)}/{Number(row.delivery_planned_quantity||0)} {row.unit}</Text>},
+              {title:'Lắp đặt',width:150,render:(_,row)=><Text>{Number(row.installation_completed_quantity||0)}/{Number(row.installation_planned_quantity||0)} {row.unit}</Text>},
               {title:'Đơn giá',dataIndex:'unit_price',align:'right',render:money,width:150},
               {title:'Thành tiền',align:'right',render:(_,row)=>money(Number(row.quantity)*Number(row.unit_price)),width:160},
               {title:'',width:130,render:(_,row)=><Button size="small" disabled={['COMPLETED','CANCELLED'].includes(detail.status)} onClick={()=>openQuantityAdjustment(row)}>Điều chỉnh SL</Button>},
@@ -482,8 +566,9 @@ export default function OrderList() {
             {title:'Lý do',dataIndex:'reason'},
             {title:'Người thực hiện',dataIndex:'changed_by_name',render:value=>value||'Hệ thống',width:160},
           ]}/>:<Empty description="Chưa có thay đổi sau khi tạo Đơn hàng"/>},
+          {key:'execution',label:`Lịch sử thực hiện (${detail.execution_logs?.length||0})`,children:detail.execution_logs?.length?<Table rowKey="id" size="small" pagination={{pageSize:8}} dataSource={detail.execution_logs} columns={executionColumns}/>:<Empty description="Chưa có lịch sử sản xuất, giao/lắp hoặc dọn Lệnh SX"/>},
         ]}/>
-        <Space wrap style={{marginTop:16}}><Button type="primary" onClick={()=>openProductionList(detail)}>Danh sách Lệnh sản xuất liên quan</Button>{detail.status!=='CANCELLED'&&<Button danger onClick={()=>cancelOrder(detail)}>Hủy đơn hàng</Button>}<Button danger icon={<DeleteOutlined/>} onClick={()=>deleteOrder(detail)}>Xóa đơn hàng và Công việc</Button></Space>
+        <Space wrap style={{marginTop:16}}><Button type="primary" onClick={()=>openProductionList(detail)}>Danh sách Lệnh sản xuất liên quan</Button>{detail.status!=='CANCELLED'&&<Button href={`/tasks?project_id=${detail.project_id}&create=fulfillment&order_id=${detail.id}`}>Tạo Giao hàng/Lắp đặt</Button>}{detail.status!=='CANCELLED'&&<Button danger onClick={()=>cancelOrder(detail)}>Hủy đơn hàng</Button>}<Button danger icon={<DeleteOutlined/>} onClick={()=>deleteOrder(detail)}>Xóa đơn hàng và Công việc</Button></Space>
       </>}
     </Modal>
 
@@ -514,7 +599,7 @@ export default function OrderList() {
       </Form>
     </Modal>
 
-    <Modal title={`Tạo Kế hoạch sản xuất${context?.order?.order_code ? ` — ${context.order.order_code}` : ''}`} open={planModal} onCancel={() => setPlanModal(false)} footer={null} width={1180} destroyOnClose>
+    <Modal title={`${productionPlanTarget ? 'Tạo Lệnh sản xuất trong' : 'Tạo Kế hoạch sản xuất'}${context?.order?.order_code ? ` — ${context.order.order_code}` : ''}`} open={planModal} onCancel={() => { setPlanModal(false); setProductionPlanTarget(null); }} footer={null} width={1180} destroyOnClose>
       <Form form={planForm} layout="vertical" onFinish={createPlan}>
         <Form.Item name="order_id" hidden><Input /></Form.Item>
         {context && <Descriptions bordered size="small" column={3} style={{marginBottom:8}}><Descriptions.Item label="Dự án">{context.order.project_name}</Descriptions.Item><Descriptions.Item label="Đơn hàng">{context.order.order_code}</Descriptions.Item><Descriptions.Item label="Khách hàng">{context.order.company_name||'-'}</Descriptions.Item></Descriptions>}
@@ -526,13 +611,13 @@ export default function OrderList() {
           {planTimeMode === 'CUSTOM' && <Col span={14}><Text type="secondary">Chọn ngày riêng cho từng Công đoạn.</Text></Col>}
         </Row>
 
-        <Divider orientation="left">2. Nhóm sản xuất — hạng mục trước, Quy trình sau</Divider>
+        <Divider orientation="left">{productionPlanTarget ? 'Lệnh sản xuất — chọn hạng mục và Quy trình' : 'Các Lệnh sản xuất trong Kế hoạch — hạng mục trước, Quy trình sau'}</Divider>
         <Form.List name="groups">{(groupFields, { add, remove: removeGroup }) => <Space direction="vertical" style={{ width: '100%' }} size="middle">
           {groupFields.map((groupField, groupIndex) => {
             const process = groupProcesses[groupIndex];
-            return <Card key={groupField.key} title={`Nhóm sản xuất ${groupIndex + 1}`} extra={groupFields.length > 1 && <Button danger type="text" onClick={() => removeProductionGroup(removeGroup, groupIndex)}>Xóa Nhóm</Button>}>
+            return <Card key={groupField.key} title={`Lệnh sản xuất ${groupIndex + 1}`} extra={groupFields.length > 1 && <Button danger type="text" onClick={() => removeProductionGroup(removeGroup, groupIndex)}>Xóa Lệnh</Button>}>
               <Row gutter={12}>
-                <Col span={9}><Form.Item {...groupField} name={[groupField.name, 'group_name']} label="Tên Nhóm"><Input placeholder={`Ví dụ: Kệ lớn — Đợt 1`} /></Form.Item></Col>
+                <Col span={9}><Form.Item {...groupField} name={[groupField.name, 'group_name']} label="Tên Lệnh SX"><Input placeholder={`Ví dụ: Kệ lớn — Đợt 1`} /></Form.Item></Col>
                 <Col span={15}><Form.Item {...groupField} name={[groupField.name, 'process_id']} label="Quy trình sản xuất" rules={[{ required: true, message: 'Chọn Quy trình' }]}><Select placeholder="Chọn sau khi đã chọn hạng mục" options={(context?.processes || []).map(value => ({ value: value.id, label: `${value.name} — v${value.version} · ${value.stage_count} công đoạn` }))} onChange={id => changeGroupProcess(groupIndex, id)} /></Form.Item></Col>
               </Row>
               <Space style={{ marginBottom: 8 }}><Button size="small" onClick={() => selectAllGroup(groupIndex, true)}>Chọn tất cả</Button><Button size="small" onClick={() => selectAllGroup(groupIndex, false)}>Bỏ chọn tất cả</Button></Space>
@@ -545,14 +630,14 @@ export default function OrderList() {
               <Form.List name={[groupField.name, 'stages']}>{stageFields => planTimeMode==='CUSTOM'?<Space direction="vertical" style={{width:'100%',marginTop:10}}>{stageFields.map((stageField,stageIndex)=>{const stage=process?.stages?.[stageIndex];return <Card key={stageField.key} size="small"><Form.Item {...stageField} name={[stageField.name,'source_stage_id']} hidden><Input/></Form.Item><Row gutter={12} align="middle"><Col span={8}><Text strong>{stageIndex+1}. {stage?.name||'Công đoạn'}</Text></Col><Col span={8}><Form.Item {...stageField} name={[stageField.name,'start_date']} label="Từ ngày" rules={[{required:true}]} style={{marginBottom:0}}><DatePicker format="DD/MM/YYYY" style={{width:'100%'}}/></Form.Item></Col><Col span={8}><Form.Item {...stageField} name={[stageField.name,'end_date']} label="Đến ngày" rules={[{required:true}]} style={{marginBottom:0}}><DatePicker format="DD/MM/YYYY" style={{width:'100%'}}/></Form.Item></Col></Row></Card>;})}</Space>:<>{stageFields.map(stageField=><Form.Item key={stageField.key} {...stageField} name={[stageField.name,'source_stage_id']} hidden><Input/></Form.Item>)}</>}</Form.List>
             </Card>;
           })}
-          <Button block type="dashed" icon={<PlusOutlined />} onClick={() => add(blankGroup(context?.order?.items))}>Thêm Nhóm sản xuất / Quy trình khác</Button>
+          {!productionPlanTarget && <Button block type="dashed" icon={<PlusOutlined />} onClick={() => add(blankGroup(context?.order?.items))}>Thêm Lệnh sản xuất / Quy trình khác</Button>}
         </Space>}</Form.List>
 
-        <Divider orientation="left">3. Giám sát / nhân sự tham gia toàn Kế hoạch</Divider>
-        <Text type="secondary">Phân công này áp dụng một lần cho toàn Kế hoạch.</Text>
+        <Divider orientation="left">3. Giám sát / nhân sự tham gia {productionPlanTarget ? 'Lệnh sản xuất' : 'toàn Kế hoạch'}</Divider>
+        <Text type="secondary">Phân công này áp dụng {productionPlanTarget ? 'cho Lệnh sản xuất này.' : 'một lần cho toàn Kế hoạch.'}</Text>
         <Form.List name="global_assignments">{(fields, { add, remove: removeAssignment }) => <>{fields.map(field => <Card key={field.key} size="small"><AssignmentFields field={field} global /><Button danger type="link" onClick={() => removeAssignment(field.name)}>Xóa</Button></Card>)}<Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ role: supervisorRole, time_mode: 'PROJECT' })}>Thêm Giám sát / nhân sự toàn Kế hoạch</Button></>}</Form.List>
         <Form.Item name="notes" label="Ghi chú" style={{ marginTop: 12 }}><Input.TextArea rows={2} /></Form.Item>
-        <Button type="primary" htmlType="submit" loading={savingPlan}>Tạo Kế hoạch sản xuất</Button>
+        <Button type="primary" htmlType="submit" loading={savingPlan}>{productionPlanTarget ? 'Tạo Lệnh sản xuất' : 'Tạo Kế hoạch sản xuất'}</Button>
       </Form>
     </Modal>
 
@@ -564,8 +649,8 @@ export default function OrderList() {
         </Descriptions>
         <Divider orientation="left">Nhân sự toàn Kế hoạch</Divider>
         {planDetail.assignments?.length ? <Table rowKey="id" size="small" pagination={false} dataSource={planDetail.assignments} columns={[{ title: 'Nhân viên', dataIndex: 'full_name' }, { title: 'Vai trò', dataIndex: 'role' }, { title: 'Phạm vi', dataIndex: 'time_mode', render: value => assignmentTimeModes.find(option => option.value === value)?.label || value }, { title: 'Thời gian', render: (_, row) => `${formatDate(row.start_date)} – ${formatDate(row.end_date)}` }]} /> : <Empty description="Không có nhân sự toàn Kế hoạch" />}
-        <Divider orientation="left">Các Nhóm sản xuất</Divider>
-        <Space direction="vertical" style={{ width: '100%' }}>{planDetail.groups?.map(group => <Card key={group.id} size="small" title={`${group.group_name} · ${group.production_code}`} extra={<Space><Tag color="blue">{group.process_name}</Tag><Tag color={productionStatus[group.status]?.[1]}>{productionStatus[group.status]?.[0] || group.status}</Tag><Button size="small" onClick={() => showProduction(group.id)}>Mở Lệnh</Button>{!['COMPLETED','CANCELLED'].includes(group.status) && <Button size="small" danger onClick={() => cancelGroup(group)}>Hủy Nhóm</Button>}</Space>}>
+        <Divider orientation="left">Các Lệnh sản xuất trong Kế hoạch</Divider>
+        <Space direction="vertical" style={{ width: '100%' }}>{planDetail.groups?.map(group => <Card key={group.id} size="small" title={`${group.group_name} · ${group.production_code}`} extra={<Space><Tag color="blue">{group.process_name}</Tag><Tag color={productionStatus[group.status]?.[1]}>{productionStatus[group.status]?.[0] || group.status}</Tag><Button size="small" onClick={() => showProduction(group.id)}>Mở Lệnh</Button>{!['COMPLETED','CANCELLED'].includes(group.status) && <Button size="small" danger onClick={() => cancelGroup(group)}>Hủy Lệnh</Button>}{group.status==='CANCELLED'&&<Button size="small" danger icon={<DeleteOutlined/>} onClick={()=>purgeCancelledGroup(group)}>Dọn</Button>}</Space>}>
           <Table rowKey="id" size="small" pagination={false} dataSource={group.items} columns={[{ title: 'Hạng mục', dataIndex: 'item_name' }, { title: 'Số lượng', render: (_, row) => `${Number(row.planned_quantity)} ${row.unit}` }]} />
           <Table rowKey="id" size="small" pagination={false} style={{ marginTop: 12 }} dataSource={group.stages} columns={[
             { title: 'Công đoạn', render: (_, stage) => <Space direction="vertical" size={0}><Text strong>{stage.sequence_no}. {stage.stage_name}</Text><Text type="secondary">{formatDate(stage.planned_start_date)} – {formatDate(stage.planned_end_date)}</Text></Space> },
@@ -573,11 +658,30 @@ export default function OrderList() {
             { title: '', width: 250, render: (_, stage) => <Space><Button size="small" onClick={() => openStageEdit(stage)}>Sửa Công đoạn</Button><Button size="small" type="primary" href={`/tasks?project_id=${planDetail.project_id}&stage_id=${stage.id}`}>Thêm Công việc</Button></Space> },
           ]} />
         </Card>)}</Space>
-        {!['COMPLETED','CANCELLED'].includes(planDetail.status) && <Button danger style={{ marginTop: 16 }} onClick={() => cancelPlan(planDetail)}>Hủy toàn bộ Kế hoạch và trả số lượng</Button>}
+        <Space style={{ marginTop: 16 }}>
+          {!['COMPLETED','CANCELLED'].includes(planDetail.status) && <Button danger onClick={() => cancelPlan(planDetail)}>Hủy toàn bộ Kế hoạch và trả số lượng</Button>}
+          {!['COMPLETED','CANCELLED'].includes(planDetail.status) && <Button type="primary" icon={<PlusOutlined />} onClick={() => openProductionOrder(planDetail)}>Tạo Lệnh sản xuất trong Kế hoạch</Button>}
+          {planDetail.status==='CANCELLED' && <Button danger icon={<DeleteOutlined/>} onClick={() => purgeCancelledPlan(planDetail)}>Dọn Kế hoạch đã hủy</Button>}
+          <Button onClick={()=>openDetail(planDetail.order_id,'execution')}>Mở Lịch sử thực hiện đơn hàng</Button>
+        </Space>
       </>}
     </Modal>
 
     <Modal title={`Ghi sản lượng — ${outputTarget?.item_name || ''}`} open={!!outputTarget} onCancel={() => setOutputTarget(null)} footer={null}><Form form={outputForm} layout="vertical" onFinish={recordOutput}><Form.Item name="output_date" label="Ngày ghi nhận" rules={[{ required: true }]}><DatePicker format="DD/MM/YYYY" /></Form.Item><Row gutter={12}><Col span={8}><Form.Item name="good_quantity" label="Số lượng đạt" rules={[{ required: true }]}><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col><Col span={8}><Form.Item name="defect_quantity" label="Số lượng lỗi"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col><Col span={8}><Form.Item name="rework_quantity" label="Làm lại"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col></Row><Form.Item name="notes" label="Ghi chú"><Input.TextArea rows={2} /></Form.Item><Button type="primary" htmlType="submit">Ghi nhận</Button></Form></Modal>
     <Modal title="Sửa Công đoạn" open={!!editingStage} onCancel={() => setEditingStage(null)} footer={null}><Form form={stageForm} layout="vertical" onFinish={saveStage}><Form.Item name="stage_name" label="Tên Công đoạn" rules={[{ required: true }]}><Input /></Form.Item><Row gutter={12}><Col span={12}><Form.Item name="planned_start_date" label="Từ ngày" rules={[{ required: true }]}><DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} /></Form.Item></Col><Col span={12}><Form.Item name="planned_end_date" label="Đến ngày" rules={[{ required: true }]}><DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} /></Form.Item></Col></Row><Alert type="info" showIcon message="Công việc và nhân sự được quản lý trong trang Nhiệm vụ." style={{ marginBottom: 12 }} /><Button type="primary" htmlType="submit">Lưu Công đoạn</Button></Form></Modal>
+    <Modal title={`Lệnh SX đã ghi nhận — ${historySnapshot?.production_code||''}`} open={!!historySnapshot} onCancel={()=>setHistorySnapshot(null)} footer={null} width={900}>
+      {historySnapshot&&<>
+        <Descriptions bordered size="small" column={2}>
+          <Descriptions.Item label="Lệnh SX">{historySnapshot.production_code}</Descriptions.Item>
+          <Descriptions.Item label="Trạng thái"><Tag color={productionStatus[historySnapshot.status]?.[1]}>{productionStatus[historySnapshot.status]?.[0]||historySnapshot.status}</Tag></Descriptions.Item>
+          <Descriptions.Item label="Đơn hàng">{historySnapshot.order_code}</Descriptions.Item>
+          <Descriptions.Item label="Dự án">{historySnapshot.project_name}</Descriptions.Item>
+          <Descriptions.Item label="Nhóm">{historySnapshot.group_name||'-'}</Descriptions.Item>
+          <Descriptions.Item label="Quy trình">{historySnapshot.process_name||'-'}</Descriptions.Item>
+        </Descriptions>
+        <Divider orientation="left">Hạng mục trong Lệnh</Divider>
+        {productionSnapshotItems(historySnapshot)}
+      </>}
+    </Modal>
   </div>;
 }

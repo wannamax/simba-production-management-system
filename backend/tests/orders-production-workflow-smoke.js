@@ -9,7 +9,7 @@ async function request(path,options={}){
 (async()=>{
   let projectId,processId;
   try{
-    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-I');
+    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-J');
     const processMeta=await request('/production-workflows/meta');assert.equal(processMeta.status,200);
     const projectType=processMeta.body.data.project_types[0];
     const workItem=processMeta.body.data.work_items[0];assert.ok(workItem);
@@ -57,7 +57,7 @@ async function request(path,options={}){
     const completed=await request(`/production-workflows/orders/${current.id}/status`,{method:'PATCH',body:JSON.stringify({status:'COMPLETED'})});assert.equal(completed.status,200);
     const orderAfter=await request(`/orders/${orderId}`);assert.equal(orderAfter.body.data.status,'IN_PRODUCTION');
 
-    console.log(`Orders & Production Workflow 2.6.0-I smoke test passed (order ${orderId}, production ${current.id})`);
+    console.log(`Orders & Production Workflow 2.6.0-J smoke test passed (order ${orderId}, production ${current.id})`);
   }finally{
     if(projectId)await request(`/projects/${projectId}`,{method:'DELETE'}).catch(()=>{});
     if(processId)await request(`/production-workflows/processes/${processId}`,{method:'DELETE'}).catch(()=>{});

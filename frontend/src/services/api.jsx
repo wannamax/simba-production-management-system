@@ -215,7 +215,9 @@ export const productionPlanAPI = {
   updateStage: (id, data) => api.patch(`/production-plans/stages/${id}`, data),
   updateGroup: (id, data) => api.patch(`/production-plans/groups/${id}`, data),
   cancelGroup: (id, reason) => api.delete(`/production-plans/groups/${id}`, { data: { reason } }),
+  purgeCancelledGroup: (id, reason) => api.delete(`/production-plans/groups/${id}/purge`, { data: { reason } }),
   cancel: (id, reason) => api.delete(`/production-plans/${id}`, { data: { reason } }),
+  purgeCancelledPlan: (id, reason) => api.delete(`/production-plans/${id}/purge-cancelled`, { data: { reason } }),
 };
 
 // ==================== WORK GROUPS & WORK CATALOG ====================
