@@ -3,6 +3,8 @@ const pool = require('../config/database');
 
 const router = express.Router();
 
+const SYSTEM_WORK_ITEM_CODES = new Set(['SUPERVISION', 'DELIVERY', 'ON_SITE_INSTALLATION']);
+
 const clean = value => value === undefined || value === null ? null : String(value).trim() || null;
 const normalizeCode = value => String(value || '')
   .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -134,6 +136,7 @@ router.post('/items', async (req, res, next) => {
     const code = normalizeCode(req.body?.code || name);
     const groupId = Number(req.body?.group_id);
     const executionType = clean(req.body?.execution_type);
+    if (SYSTEM_WORK_ITEM_CODES.has(code)) return res.status(409).json({ success:false, message:'Mã này thuộc Công việc hệ thống và không thể tạo thủ công' });
     if (executionType && !['DELIVERY','INSTALLATION'].includes(executionType)) return res.status(400).json({ success:false, message:'Loại thực thi không hợp lệ' });
     if (!name || !code || !Number.isInteger(groupId)) return res.status(400).json({ success:false, message:'Nhóm và tên công việc là bắt buộc' });
     await client.query('BEGIN');
@@ -158,6 +161,11 @@ router.post('/items', async (req, res, next) => {
 router.put('/items/:id', async (req, res, next) => {
   const client = await pool.connect();
   try {
+    const current = await client.query('SELECT code,is_system FROM work_items WHERE id=$1', [req.params.id]);
+    if (!current.rowCount) return res.status(404).json({ success:false, message:'Không tìm thấy công việc' });
+    if (current.rows[0].is_system || SYSTEM_WORK_ITEM_CODES.has(current.rows[0].code)) {
+      return res.status(409).json({ success:false, message:'Công việc hệ thống được ghi cứng và không thể chỉnh sửa' });
+    }
     const name = clean(req.body?.name);
     const groupId = Number(req.body?.group_id);
     const executionType = clean(req.body?.execution_type);
@@ -183,6 +191,11 @@ router.put('/items/:id', async (req, res, next) => {
 
 router.delete('/items/:id', async (req, res, next) => {
   try {
+    const current = await pool.query('SELECT code,is_system FROM work_items WHERE id=$1', [req.params.id]);
+    if (!current.rowCount) return res.status(404).json({ success:false, message:'Không tìm thấy công việc' });
+    if (current.rows[0].is_system || SYSTEM_WORK_ITEM_CODES.has(current.rows[0].code)) {
+      return res.status(409).json({ success:false, message:'Công việc hệ thống được ghi cứng và không thể xóa' });
+    }
     const used = await pool.query('SELECT count(*)::int count FROM tasks WHERE work_item_id=$1', [req.params.id]);
     if (used.rows[0].count) return res.status(409).json({ success:false, message:'Công việc đã được dùng trong Task. Hãy chuyển sang Không hoạt động.' });
     const result = await pool.query('DELETE FROM work_items WHERE id=$1 RETURNING id', [req.params.id]);
@@ -288,7 +301,7 @@ router.get('/project-context/:projectId', async (req, res, next) => {
       [req.params.projectId]
     );
     if (!project.rowCount) return res.status(404).json({ success:false, message:'Không tìm thấy dự án' });
-    const [items,employees,roles,productionStages] = await Promise.all([
+    const [items,employees,roles,productionStages,orders] = await Promise.all([
       pool.query(
         `SELECT wi.id,wi.code,wi.name,wi.description,wi.execution_type,
           g.id group_id,g.name group_name,g.color group_color
@@ -336,8 +349,44 @@ router.get('/project-context/:projectId', async (req, res, next) => {
          ORDER BY production.created_at DESC,stage.sequence_no`,
         [req.params.projectId]
       ),
+      pool.query(
+        `SELECT orders.id,orders.order_code,orders.order_date,orders.expected_delivery_date,orders.status,
+          COALESCE(jsonb_agg(jsonb_build_object(
+            'id',item.id,'item_code',item.item_code,'item_name',item.item_name,'unit',item.unit,'quantity',item.quantity,
+            'delivery_allocated_quantity',COALESCE((
+              SELECT SUM(link.planned_quantity) FROM task_order_fulfillment_items link
+              JOIN tasks task ON task.id=link.task_id
+              WHERE link.order_item_id=item.id AND link.execution_type='DELIVERY'
+                AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')
+            ),0),
+            'delivery_completed_quantity',COALESCE((
+              SELECT SUM(link.completed_quantity) FROM task_order_fulfillment_items link
+              JOIN tasks task ON task.id=link.task_id
+              WHERE link.order_item_id=item.id AND link.execution_type='DELIVERY'
+                AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')
+            ),0),
+            'installation_allocated_quantity',COALESCE((
+              SELECT SUM(link.planned_quantity) FROM task_order_fulfillment_items link
+              JOIN tasks task ON task.id=link.task_id
+              WHERE link.order_item_id=item.id AND link.execution_type='INSTALLATION'
+                AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')
+            ),0),
+            'installation_completed_quantity',COALESCE((
+              SELECT SUM(link.completed_quantity) FROM task_order_fulfillment_items link
+              JOIN tasks task ON task.id=link.task_id
+              WHERE link.order_item_id=item.id AND link.execution_type='INSTALLATION'
+                AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')
+            ),0)
+          ) ORDER BY item.id) FILTER(WHERE item.id IS NOT NULL),'[]'::jsonb) items
+         FROM project_orders orders
+         LEFT JOIN project_order_items item ON item.order_id=orders.id
+         WHERE orders.project_id=$1 AND orders.status<>'CANCELLED'
+         GROUP BY orders.id ORDER BY orders.created_at DESC`,
+        [req.params.projectId]
+      ),
     ]);
-    res.json({ success:true, data:{ project:project.rows[0], work_items:items.rows, employees:employees.rows, roles:roles.rows, production_stages:productionStages.rows } });
+    res.json({ success:true, data:{ project:project.rows[0], work_items:items.rows, employees:employees.rows,
+      roles:roles.rows, production_stages:productionStages.rows, orders:orders.rows } });
   } catch (error) { next(error); }
 });
 

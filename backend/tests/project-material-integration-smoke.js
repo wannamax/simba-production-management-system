@@ -15,7 +15,7 @@ async function createAndPost(payload){
 }
 
 (async()=>{
-  const health=await request('/health'); assert.equal(health.body.version,'2.6.0-I');
+  const health=await request('/health'); assert.equal(health.body.version,'2.6.0-J');
   const meta=await request('/inventory/meta'); assert.equal(meta.response.status,200,JSON.stringify(meta.body));
   const warehouse=meta.body.data.warehouses[0]; const unit=meta.body.data.units.find(x=>x.code==='PIECE')||meta.body.data.units[0];
   assert(warehouse&&unit,'Cần kho và đơn vị tính');

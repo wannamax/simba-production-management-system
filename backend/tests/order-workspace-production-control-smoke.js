@@ -9,7 +9,7 @@ async function request(path,options={}){
 (async()=>{
   const stamp=Date.now();let projectId,processId;
   try{
-    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-I');
+    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-J');
     const meta=await request('/production-workflows/meta');const projectType=meta.body.data.project_types[0],workItem=meta.body.data.work_items[0];assert.ok(projectType&&workItem);
     const project=await request('/projects',{method:'POST',body:JSON.stringify({project_name:`Order Workspace I ${stamp}`,project_type:projectType,start_date:'2026-07-22',end_date:'2026-08-22',priority:'Trung bình'})});
     assert.equal(project.status,201,JSON.stringify(project.body));projectId=project.body.data.id;
@@ -49,7 +49,7 @@ async function request(path,options={}){
     const output=await request(`/production-workflows/stage-items/${stageItem.id}/output`,{method:'POST',body:JSON.stringify({output_date:'2026-07-23',good_quantity:1,defect_quantity:0,rework_quantity:0})});assert.equal(output.status,200,JSON.stringify(output.body));
     const blockedCancel=await request(`/production-plans/groups/${production.id}`,{method:'DELETE',body:JSON.stringify({reason:'Không được trả lại sản lượng đã ghi'})});assert.equal(blockedCancel.status,409);assert.match(blockedCancel.body.message,/đã ghi nhận sản lượng/i);
     const hierarchy=await request(`/tasks?project_id=${projectId}`);assert.equal(hierarchy.status,200);assert.ok(hierarchy.body.production_stages.length);assert.equal(hierarchy.body.production_stages[0].production_items.length,1);
-    console.log(`Order Workspace & Production Order Control 2.6.0-I smoke test passed (${order.body.data.order_code})`);
+    console.log(`Order Workspace & Production Order Control 2.6.0-J smoke test passed (${order.body.data.order_code})`);
   }finally{
     if(projectId)await request(`/projects/${projectId}`,{method:'DELETE'}).catch(()=>{});
     if(processId)await request(`/production-workflows/processes/${processId}`,{method:'DELETE'}).catch(()=>{});

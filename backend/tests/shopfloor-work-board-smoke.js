@@ -12,7 +12,7 @@ async function request(path, options = {}) {
 (async () => {
   const health = await request('/health');
   assert.equal(health.response.status, 200);
-  assert.equal(health.body.version, '2.6.0-I');
+  assert.equal(health.body.version, '2.6.0-J');
 
   const meta = await request('/shopfloor-work-board/meta');
   assert.equal(meta.response.status, 200, JSON.stringify(meta.body));
@@ -128,5 +128,5 @@ async function request(path, options = {}) {
     body: JSON.stringify({ title: 'Không được sửa sau chốt', status: 'COMPLETED', progress: 100 }),
   });
   assert.equal(rejected.response.status, 404);
-  console.log(`Daily Shopfloor Work Board 2.6.0-I Task/Journal smoke test passed (board ${boardId})`);
+  console.log(`Daily Shopfloor Work Board 2.6.0-J Task/Journal smoke test passed (board ${boardId})`);
 })().catch(error => { console.error(error); process.exit(1); });

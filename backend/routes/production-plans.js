@@ -82,6 +82,43 @@ async function getPlan(db,id){
   }
   return {...plan.rows[0],assignments:assignments.rows,groups:detailed};
 }
+function quantityText(value){
+  return Number(value||0).toLocaleString('vi-VN',{maximumFractionDigits:3});
+}
+async function getProductionSnapshot(db,id){
+  const production=await db.query(`SELECT production.*,orders.order_code,project.project_code,project.project_name,customer.company_name
+    FROM production_orders production
+    JOIN project_orders orders ON orders.id=production.order_id
+    JOIN projects project ON project.id=production.project_id
+    LEFT JOIN customers customer ON customer.id=project.customer_id
+    WHERE production.id=$1`,[id]);
+  if(!production.rowCount)throw fail('Không tìm thấy Lệnh sản xuất',404);
+  const [items,stages,tasks]=await Promise.all([
+    db.query(`SELECT item.*,source.item_code,source.item_name,source.unit FROM production_order_items item
+      JOIN project_order_items source ON source.id=item.order_item_id
+      WHERE item.production_order_id=$1 ORDER BY item.id`,[id]),
+    db.query(`SELECT stage.* FROM production_stage_instances stage WHERE stage.production_order_id=$1 ORDER BY stage.sequence_no`,[id]),
+    db.query(`SELECT work.id,work.task_code,work.task_name,work.status,work.deleted_at
+      FROM tasks work JOIN production_stage_instances stage ON stage.id=work.production_stage_instance_id
+      WHERE stage.production_order_id=$1 ORDER BY work.created_at`,[id]),
+  ]);
+  return {...production.rows[0],items:items.rows,stages:stages.rows,tasks:tasks.rows};
+}
+function returnedItemsNote(snapshot){
+  const rows=(snapshot.items||[]).map(item=>`${item.item_name}: ${quantityText(item.planned_quantity)} ${item.unit}`);
+  return rows.length?`Trả ${rows.join('; ')} về đơn`:'Không có hạng mục cần trả về đơn';
+}
+function productionItemsNote(items,prefix){
+  const rows=(items||[]).map(item=>`${item.item_name}: ${quantityText(item.planned_quantity)} ${item.unit}`);
+  return rows.length?`${prefix} ${rows.join('; ')}`:null;
+}
+async function insertExecutionLog(db,{orderId,productionOrderId=null,eventType,eventSummary,systemNote=null,snapshot=null,metadata=null,userId}){
+  await db.query(`INSERT INTO order_execution_logs(order_id,production_order_id,event_type,event_summary,system_note,production_order_snapshot,metadata,performed_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[
+    orderId,productionOrderId,eventType,eventSummary,systemNote,
+    snapshot?JSON.stringify(snapshot):null,metadata?JSON.stringify(metadata):'{}',userId||1,
+  ]);
+}
 
 router.get('/',async(req,res,next)=>{try{
   const params=[];let where='WHERE 1=1';
@@ -114,7 +151,18 @@ async function cancelProductionGroups(db,groupIds,reason,userId){
   const stageIds=(await db.query(`SELECT id FROM production_stage_instances WHERE production_order_id=ANY($1::bigint[])`,[groupIds])).rows.map(row=>row.id);
   if(stageIds.length)await db.query(`UPDATE tasks SET deleted_at=COALESCE(deleted_at,NOW()),deleted_by=$1,status='Hủy',updated_at=NOW()
     WHERE production_stage_instance_id=ANY($2::bigint[]) AND deleted_at IS NULL`,[userId,stageIds]);
+  const snapshots=[];
+  for(const group of groups.rows)snapshots.push(await getProductionSnapshot(db,group.id));
   await db.query(`UPDATE production_orders SET status='CANCELLED',cancelled_at=NOW(),cancelled_by=$1,cancellation_reason=$2 WHERE id=ANY($3::bigint[])`,[userId,reason,groupIds]);
+  for(const snapshot of snapshots){
+    const cancelledSnapshot={...snapshot,status:'CANCELLED',cancellation_reason:reason};
+    await insertExecutionLog(db,{
+      orderId:snapshot.order_id,productionOrderId:snapshot.id,eventType:'PRODUCTION_CANCELLED',
+      eventSummary:`Hủy đơn ${snapshot.production_code}`,
+      systemNote:returnedItemsNote(snapshot),snapshot:cancelledSnapshot,
+      metadata:{reason},userId,
+    });
+  }
   for(const planId of [...new Set(groups.rows.map(group=>group.production_plan_id).filter(Boolean))]){
     await db.query(`UPDATE production_plans plan SET status=CASE
       WHEN NOT EXISTS(SELECT 1 FROM production_orders child WHERE child.production_plan_id=plan.id AND child.status<>'CANCELLED') THEN 'CANCELLED'
@@ -186,13 +234,73 @@ router.patch('/groups/:id',async(req,res,next)=>{const db=await pool.connect();t
   const reason=String(req.body.reason||'Điều chỉnh Lệnh sản xuất').trim();if(reason.length<3)throw fail('Cần nhập lý do điều chỉnh Lệnh SX');
   await db.query(`INSERT INTO order_item_change_logs(order_id,change_type,reason,before_data,after_data,changed_by)
     VALUES($1,'PRODUCTION_ORDER_CHANGE',$2,$3,$4,$5)`,[production.order_id,reason,JSON.stringify({production_order_id:production.id,production_code:production.production_code,group_name:production.group_name,items:existing.rows.map(item=>({order_item_id:item.order_item_id,planned_quantity:item.planned_quantity}))}),JSON.stringify({production_order_id:production.id,production_code:production.production_code,group_name:groupName,items:after.rows}),req.user?.id||1]);
+  await insertExecutionLog(db,{
+    orderId:production.order_id,productionOrderId:production.id,eventType:'PRODUCTION_UPDATED',
+    eventSummary:`Điều chỉnh đơn ${production.production_code}`,
+    systemNote:`Cập nhật tên/số lượng Lệnh SX: ${groupName}`,snapshot:await getProductionSnapshot(db,production.id),
+    metadata:{reason},userId:req.user?.id||1,
+  });
   await db.query('COMMIT');res.json({success:true,message:'Đã cập nhật Lệnh sản xuất và ghi Nhật ký Đơn hàng',data:await getPlan(pool,production.production_plan_id)});
+}catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
+
+// Keep the explicit purge route before the generic group route. Express matches
+// routes in declaration order, so otherwise `/groups/:id/purge` is swallowed by
+// `/groups/:id` and the UI receives the cancellation response instead of purging.
+router.delete('/groups/:id/purge',async(req,res,next)=>{const db=await pool.connect();try{
+  await db.query('BEGIN');
+  const snapshot=await purgeCancelledProductionGroup(db,req.params.id,String(req.body?.reason||'Dọn Lệnh SX đã hủy khỏi danh sách vận hành'),req.user?.id||1);
+  await db.query('COMMIT');
+  res.json({success:true,message:`Đã dọn Lệnh đã hủy ${snapshot.production_code}; lịch sử thực hiện vẫn được giữ lại`,data:{id:Number(req.params.id),order_id:Number(snapshot.order_id)}});
 }catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
 
 router.delete('/groups/:id',async(req,res,next)=>{const db=await pool.connect();try{
   await db.query('BEGIN');const reason=String(req.body?.reason||'Hủy Nhóm sản xuất từ Đơn hàng').trim();
   const groups=await cancelProductionGroups(db,[Number(req.params.id)],reason,req.user?.id||1);
   await db.query('COMMIT');res.json({success:true,message:'Đã hủy Nhóm sản xuất; số lượng đã được trả về phần còn lại của Đơn hàng',data:groups[0]});
+}catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
+
+async function purgeCancelledProductionGroup(db,productionId,reason,userId){
+  const production=await db.query(`SELECT * FROM production_orders WHERE id=$1 FOR UPDATE`,[productionId]);
+  if(!production.rowCount)throw fail('Không tìm thấy Lệnh sản xuất',404);
+  if(production.rows[0].status!=='CANCELLED')throw fail('Chỉ được dọn/xóa Lệnh sản xuất đã hủy',409);
+  const snapshot=await getProductionSnapshot(db,productionId);
+  await insertExecutionLog(db,{
+    orderId:snapshot.order_id,productionOrderId:snapshot.id,eventType:'PRODUCTION_PURGED',
+    eventSummary:`Dọn Lệnh đã hủy ${snapshot.production_code}`,
+    systemNote:'Đã lưu snapshot Lệnh SX đã hủy và xóa khỏi danh sách vận hành',
+    snapshot,metadata:{reason},userId,
+  });
+  // Production-stage tasks must be removed before their stage rows. The FK on
+  // tasks intentionally uses SET NULL, but the database hardening trigger
+  // rejects a PRODUCTION_STAGE task without its stage. The snapshot above
+  // preserves the task details in the execution history before this cleanup.
+  await db.query(`DELETE FROM tasks WHERE production_stage_instance_id IN
+    (SELECT id FROM production_stage_instances WHERE production_order_id=$1)`,[productionId]);
+  await db.query(`DELETE FROM production_orders WHERE id=$1`,[productionId]);
+  if(snapshot.production_plan_id){
+    await db.query(`UPDATE production_plans plan SET status=CASE
+      WHEN NOT EXISTS(SELECT 1 FROM production_orders child WHERE child.production_plan_id=plan.id) THEN 'CANCELLED'
+      WHEN NOT EXISTS(SELECT 1 FROM production_orders child WHERE child.production_plan_id=plan.id AND child.status<>'CANCELLED') THEN 'CANCELLED'
+      ELSE plan.status END
+      WHERE plan.id=$1`,[snapshot.production_plan_id]);
+  }
+  await refreshOrderAfterCancellation(db,snapshot.order_id);
+  return snapshot;
+}
+
+// The plan purge route must also precede the generic DELETE /:id route.
+router.delete('/:id/purge-cancelled',async(req,res,next)=>{const db=await pool.connect();try{
+  await db.query('BEGIN');
+  const plan=await db.query(`SELECT * FROM production_plans WHERE id=$1 FOR UPDATE`,[req.params.id]);
+  if(!plan.rowCount)throw fail('Không tìm thấy Kế hoạch sản xuất',404);
+  if(plan.rows[0].status!=='CANCELLED')throw fail('Chỉ được dọn Kế hoạch đã hủy',409);
+  const groups=(await db.query(`SELECT id FROM production_orders WHERE production_plan_id=$1 ORDER BY id`,[req.params.id])).rows.map(row=>Number(row.id));
+  if(!groups.length)throw fail('Kế hoạch đã hủy này không còn Lệnh SX để dọn',409);
+  const reason=String(req.body?.reason||'Dọn Kế hoạch đã hủy khỏi danh sách vận hành').trim();
+  const snapshots=[];
+  for(const groupId of groups)snapshots.push(await purgeCancelledProductionGroup(db,groupId,reason,req.user?.id||1));
+  await db.query('COMMIT');
+  res.json({success:true,message:`Đã dọn ${snapshots.length} Lệnh SX trong Kế hoạch ${plan.rows[0].plan_code}; lịch sử thực hiện vẫn được giữ lại`,data:{id:Number(req.params.id),purged_count:snapshots.length,order_id:Number(plan.rows[0].order_id)}});
 }catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
 
 router.delete('/:id',async(req,res,next)=>{const db=await pool.connect();try{
@@ -283,6 +391,15 @@ router.post('/',async(req,res,next)=>{const db=await pool.connect();try{
         await db.query(`INSERT INTO production_stage_items(stage_instance_id,production_order_item_id,planned_quantity) VALUES($1,$2,$3)`,[instance.rows[0].id,productionItem.id,quantity]);
       }
     }
+    await insertExecutionLog(db,{
+      orderId:order.id,productionOrderId:production.rows[0].id,eventType:'PRODUCTION_CREATED',
+      eventSummary:`Tạo Lệnh ${production.rows[0].production_code}`,
+      systemNote:returnedItemsNote({items:productionItems.map(item=>{
+        const source=orderItems.rows.find(row=>Number(row.id)===Number(item.order_item_id))||{};
+        return {...item,item_name:source.item_name,unit:source.unit};
+      })}).replace(/^Trả (.*) về đơn$/,'Đưa $1 vào sản xuất'),
+      snapshot:await getProductionSnapshot(db,production.rows[0].id),userId:req.user?.id||1,
+    });
   }
   await db.query(`UPDATE project_orders SET status='IN_PRODUCTION' WHERE id=$1`,[order.id]);
   await db.query('COMMIT');res.status(201).json({success:true,message:`Đã tạo ${planCode} với ${groups.length} Nhóm sản xuất`,data:await getPlan(pool,insertedPlan.rows[0].id)});

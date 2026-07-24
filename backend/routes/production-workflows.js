@@ -91,6 +91,20 @@ async function getProductionOrder(db,id){
   ]);
   return {...order.rows[0],items:items.rows,stages:stages.rows,global_assignments:globals.rows};
 }
+function quantityText(value){
+  return Number(value||0).toLocaleString('vi-VN',{maximumFractionDigits:3});
+}
+function itemsNote(items,prefix){
+  const rows=(items||[]).map(item=>`${item.item_name}: ${quantityText(item.planned_quantity)} ${item.unit}`);
+  return rows.length?`${prefix} ${rows.join('; ')}`:null;
+}
+async function insertExecutionLog(db,{orderId,productionOrderId=null,eventType,eventSummary,systemNote=null,snapshot=null,metadata=null,userId}){
+  await db.query(`INSERT INTO order_execution_logs(order_id,production_order_id,event_type,event_summary,system_note,production_order_snapshot,metadata,performed_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[
+    orderId,productionOrderId,eventType,eventSummary,systemNote,
+    snapshot?JSON.stringify(snapshot):null,metadata?JSON.stringify(metadata):'{}',userId||1,
+  ]);
+}
 
 router.get('/meta',async(req,res,next)=>{try{
   const [projectTypes,workItems]=await Promise.all([
@@ -153,6 +167,13 @@ router.post('/orders',async(req,res,next)=>{const db=await pool.connect();try{
   const order=await db.query(`SELECT o.*,p.project_type FROM project_orders o JOIN projects p ON p.id=o.project_id
     WHERE o.id=$1 AND o.status IN ('NOT_STARTED','IN_PRODUCTION') FOR UPDATE OF o`,[req.body.order_id]);
   if(!order.rowCount)throw fail('Đơn hàng không ở trạng thái có thể lập Lệnh sản xuất',409);
+  let productionPlanId = req.body.production_plan_id ? Number(req.body.production_plan_id) : null;
+  if(productionPlanId){
+    const plan=await db.query(`SELECT id,order_id,project_id,status FROM production_plans WHERE id=$1 FOR UPDATE`,[productionPlanId]);
+    if(!plan.rowCount)throw fail('Kế hoạch sản xuất không tồn tại',404);
+    if(Number(plan.rows[0].order_id)!==Number(req.body.order_id)||Number(plan.rows[0].project_id)!==Number(order.rows[0].project_id))throw fail('Kế hoạch không thuộc Đơn hàng/Dự án đã chọn',409);
+    if(plan.rows[0].status==='COMPLETED'||plan.rows[0].status==='CANCELLED')throw fail('Không thể thêm Lệnh vào Kế hoạch đã hoàn tất hoặc đã hủy',409);
+  }
   const process=await db.query('SELECT * FROM production_processes WHERE id=$1 AND is_active=true',[req.body.process_id]);
   if(!process.rowCount)throw fail('Quy trình sản xuất không tồn tại hoặc đã ngừng sử dụng');
   if(process.rows[0].project_types.length&&!process.rows[0].project_types.includes(order.rows[0].project_type))throw fail('Quy trình không phù hợp với Loại dự án');
@@ -179,8 +200,8 @@ router.post('/orders',async(req,res,next)=>{const db=await pool.connect();try{
   await ensureEmployees(db,globalAssignments.map(x=>x.employee_id));
   const snapshot={id:process.rows[0].id,code:process.rows[0].code,name:process.rows[0].name,version:process.rows[0].version,stages:templateStages};
   const code=await generateProductionCode(db);
-  const production=await db.query(`INSERT INTO production_orders(production_code,project_id,order_id,process_id,process_name,process_version,process_snapshot,planned_start_date,planned_end_date,notes,created_by)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,[code,order.rows[0].project_id,req.body.order_id,process.rows[0].id,process.rows[0].name,process.rows[0].version,JSON.stringify(snapshot),req.body.planned_start_date||null,req.body.planned_end_date||null,req.body.notes||null,req.user?.id||1]);
+  const production=await db.query(`INSERT INTO production_orders(production_code,project_id,order_id,production_plan_id,process_id,process_name,process_version,process_snapshot,planned_start_date,planned_end_date,notes,created_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,[code,order.rows[0].project_id,req.body.order_id,productionPlanId,process.rows[0].id,process.rows[0].name,process.rows[0].version,JSON.stringify(snapshot),req.body.planned_start_date||null,req.body.planned_end_date||null,req.body.notes||null,req.user?.id||1]);
   const productionItems=[];
   for(const item of selected){const inserted=await db.query(`INSERT INTO production_order_items(production_order_id,order_item_id,planned_quantity) VALUES($1,$2,$3) RETURNING *`,[production.rows[0].id,item.order_item_id,item.planned_quantity]);productionItems.push(inserted.rows[0]);}
   for(const assignment of globalAssignments){
@@ -207,6 +228,13 @@ router.post('/orders',async(req,res,next)=>{const db=await pool.connect();try{
     }
   }
   await db.query(`UPDATE project_orders SET status='IN_PRODUCTION' WHERE id=$1`,[req.body.order_id]);
+  const createdSnapshot=await getProductionOrder(db,production.rows[0].id);
+  await insertExecutionLog(db,{
+    orderId:order.rows[0].id,productionOrderId:production.rows[0].id,eventType:'PRODUCTION_CREATED',
+    eventSummary:`Tạo Lệnh ${production.rows[0].production_code}`,
+    systemNote:itemsNote(createdSnapshot.items,'Đưa vào sản xuất'),
+    snapshot:createdSnapshot,userId:req.user?.id||1,
+  });
   await db.query('COMMIT');res.status(201).json({success:true,message:`Đã tạo ${code} với ${templateStages.length} Công đoạn; hãy gán Công việc trong trang Nhiệm vụ`,data:await getProductionOrder(pool,production.rows[0].id)});
 }catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
 
@@ -271,6 +299,15 @@ router.post('/stage-items/:id/output',async(req,res,next)=>{const db=await pool.
       WHEN NOT EXISTS(SELECT 1 FROM production_orders child WHERE child.production_plan_id=plan.id AND child.status<>'READY_FOR_DELIVERY') THEN 'READY_FOR_DELIVERY'
       ELSE 'IN_PROGRESS' END
     WHERE plan.id=(SELECT production_plan_id FROM production_orders WHERE id=$1)`,[item.rows[0].production_order_id]);
+  const outputSnapshot=await getProductionOrder(db,item.rows[0].production_order_id);
+  const outputItem=outputSnapshot.stages.flatMap(stage=>stage.items||[]).find(row=>Number(row.id)===Number(req.params.id));
+  await insertExecutionLog(db,{
+    orderId:outputSnapshot.order_id,productionOrderId:outputSnapshot.id,eventType:'PRODUCTION_OUTPUT',
+    eventSummary:`Ghi sản lượng ${outputSnapshot.production_code}`,
+    systemNote:`${outputItem?.item_name||'Hạng mục'}: đạt +${quantityText(good)}, lỗi +${quantityText(defect)}, làm lại +${quantityText(rework)}`,
+    snapshot:outputSnapshot,metadata:{stage_item_id:Number(req.params.id),output_date:req.body.output_date||null},
+    userId:req.user?.id||1,
+  });
   await db.query('COMMIT');res.json({success:true,message:'Đã ghi nhận sản lượng công đoạn',data:await getProductionOrder(pool,item.rows[0].production_order_id)});
 }catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});
 
@@ -280,6 +317,7 @@ router.patch('/orders/:id/status',async(req,res,next)=>{const db=await pool.conn
   const current=await db.query(`SELECT * FROM production_orders WHERE id=$1 FOR UPDATE`,[req.params.id]);
   if(!current.rowCount)throw fail('Không tìm thấy lệnh sản xuất',404);
   if(status==='COMPLETED'&&current.rows[0].status!=='READY_FOR_DELIVERY')throw fail('Chỉ hoàn tất lệnh khi mọi công đoạn bắt buộc đã đạt đủ số lượng',409);
+  const beforeSnapshot=await getProductionOrder(db,req.params.id);
   const result=await db.query('UPDATE production_orders SET status=$1 WHERE id=$2 RETURNING *',[status,req.params.id]);
   if(current.rows[0].production_plan_id){
     await db.query(`UPDATE production_plans plan SET status=CASE
@@ -309,6 +347,14 @@ router.patch('/orders/:id/status',async(req,res,next)=>{const db=await pool.conn
     const active=await db.query(`SELECT COUNT(*)::int count FROM production_orders WHERE order_id=$1 AND status<>'CANCELLED'`,[current.rows[0].order_id]);
     if(active.rows[0].count===0)await db.query(`UPDATE project_orders SET status='NOT_STARTED' WHERE id=$1`,[current.rows[0].order_id]);
   }
+  const afterSnapshot={...beforeSnapshot,status};
+  await insertExecutionLog(db,{
+    orderId:current.rows[0].order_id,productionOrderId:current.rows[0].id,
+    eventType:status==='COMPLETED'?'PRODUCTION_COMPLETED':'PRODUCTION_CANCELLED',
+    eventSummary:status==='COMPLETED'?`Hoàn tất Lệnh ${current.rows[0].production_code}`:`Hủy Lệnh ${current.rows[0].production_code}`,
+    systemNote:status==='COMPLETED'?'Đã hoàn tất toàn bộ công đoạn bắt buộc':itemsNote(beforeSnapshot.items,'Trả về đơn'),
+    snapshot:afterSnapshot,userId:req.user?.id||1,
+  });
   await db.query('COMMIT');
   res.json({success:true,message:status==='COMPLETED'?'Đã hoàn tất lệnh sản xuất':'Đã hủy lệnh sản xuất',data:result.rows[0]});
 }catch(error){await db.query('ROLLBACK');if(error.status)return res.status(error.status).json({success:false,message:error.message});next(error);}finally{db.release();}});

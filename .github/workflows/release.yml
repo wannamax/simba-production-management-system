@@ -1,22 +1,22 @@
-name: Release Simba PMS 2.6.0-I
+name: Release Simba PMS 2.6.0-J
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - "v2.6.0-I"
+      - "v2.6.0-J"
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: release-simba-pms-2.6.0-I
+  group: release-simba-pms-2.6.0-J
   cancel-in-progress: false
 
 env:
   COMPOSE_FILE: compose.ci.yml
-  RELEASE_VERSION: "2.6.0-I"
+  RELEASE_VERSION: "2.6.0-J"
 
 jobs:
   test-amd64:
@@ -131,6 +131,18 @@ jobs:
           docker compose -f "$COMPOSE_FILE" exec -T \
             -e TEST_BASE_URL=http://web \
             backend node tests/shopfloor-work-board-smoke.js
+
+      - name: Test Direct Project Tasks and Order Fulfillment 2.6.0-J
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web \
+            backend node tests/direct-project-order-fulfillment-smoke.js
+
+      - name: Test Order Execution History 2.6.0-J
+        run: |
+          docker compose -f "$COMPOSE_FILE" exec -T \
+            -e TEST_BASE_URL=http://web/api \
+            backend node tests/order-execution-history-smoke.js
 
       - name: Test database backup and restore
         run: |

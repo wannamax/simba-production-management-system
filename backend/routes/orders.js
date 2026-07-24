@@ -71,10 +71,27 @@ async function getProductionTaskIds(db, orderId) {
        FROM production_orders production
        JOIN production_stage_instances stage ON stage.production_order_id=production.id
        WHERE production.order_id=$1 AND stage.task_id IS NOT NULL
+       UNION
+       SELECT task.id::integer task_id
+       FROM tasks task
+       WHERE task.order_id=$1
      ) linked`,
     [orderId]
   );
   return result.rows.map(row => Number(row.task_id));
+}
+
+async function getExecutionLogs(db, orderId) {
+  const result = await db.query(
+    `SELECT log.*,user_account.full_name performed_by_name,production.production_code live_production_code
+     FROM order_execution_logs log
+     LEFT JOIN users user_account ON user_account.id=log.performed_by
+     LEFT JOIN production_orders production ON production.id=log.production_order_id
+     WHERE log.order_id=$1
+     ORDER BY log.event_at DESC,log.id DESC`,
+    [orderId]
+  );
+  return result.rows;
 }
 
 async function getOrder(db, id) {
@@ -86,7 +103,7 @@ async function getOrder(db, id) {
     [id]
   );
   if (!order.rowCount) throw fail('Không tìm thấy đơn hàng', 404);
-  const [items, productions, changeLogs] = await Promise.all([
+  const [items, productions, changeLogs, executionLogs] = await Promise.all([
     db.query(
       `SELECT i.*,
         COALESCE((SELECT SUM(pi.planned_quantity) FROM production_order_items pi
@@ -97,7 +114,23 @@ async function getOrder(db, id) {
           WHERE psi.production_order_item_id=pi.id AND stage.tracks_quantity=true
           ORDER BY stage.sequence_no DESC,psi.id DESC LIMIT 1),0))
           FROM production_order_items pi JOIN production_orders po ON po.id=pi.production_order_id
-          WHERE pi.order_item_id=i.id AND po.status<>'CANCELLED'),0) completed_quantity
+          WHERE pi.order_item_id=i.id AND po.status<>'CANCELLED'),0) completed_quantity,
+        COALESCE((SELECT SUM(link.planned_quantity) FROM task_order_fulfillment_items link
+          JOIN tasks task ON task.id=link.task_id
+          WHERE link.order_item_id=i.id AND link.execution_type='DELIVERY'
+            AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')),0) delivery_planned_quantity,
+        COALESCE((SELECT SUM(link.completed_quantity) FROM task_order_fulfillment_items link
+          JOIN tasks task ON task.id=link.task_id
+          WHERE link.order_item_id=i.id AND link.execution_type='DELIVERY'
+            AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')),0) delivery_completed_quantity,
+        COALESCE((SELECT SUM(link.planned_quantity) FROM task_order_fulfillment_items link
+          JOIN tasks task ON task.id=link.task_id
+          WHERE link.order_item_id=i.id AND link.execution_type='INSTALLATION'
+            AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')),0) installation_planned_quantity,
+        COALESCE((SELECT SUM(link.completed_quantity) FROM task_order_fulfillment_items link
+          JOIN tasks task ON task.id=link.task_id
+          WHERE link.order_item_id=i.id AND link.execution_type='INSTALLATION'
+            AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')),0) installation_completed_quantity
        FROM project_order_items i WHERE i.order_id=$1 ORDER BY i.id`, [id]
     ),
     db.query(
@@ -120,8 +153,9 @@ async function getOrder(db, id) {
       LEFT JOIN project_order_items item ON item.id=log.order_item_id
       LEFT JOIN users user_account ON user_account.id=log.changed_by
       WHERE log.order_id=$1 ORDER BY log.created_at DESC,log.id DESC`,[id]),
+    getExecutionLogs(db,id),
   ]);
-  return { ...order.rows[0], items:items.rows, production_orders:productions.rows, change_logs:changeLogs.rows };
+  return { ...order.rows[0], items:items.rows, production_orders:productions.rows, change_logs:changeLogs.rows, execution_logs:executionLogs };
 }
 
 router.get('/meta', async (req, res, next) => {
@@ -148,6 +182,8 @@ router.get('/', async (req, res, next) => {
         (SELECT COUNT(*)::int FROM project_order_items i WHERE i.order_id=o.id) item_count,
         COALESCE((SELECT SUM(i.quantity*i.unit_price) FROM project_order_items i WHERE i.order_id=o.id),0) total_amount,
         (SELECT COUNT(*)::int FROM production_orders po WHERE po.order_id=o.id AND po.status<>'CANCELLED') production_order_count,
+        (SELECT COUNT(*)::int FROM tasks task WHERE task.order_id=o.id
+          AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')) fulfillment_task_count,
         EXISTS(
           SELECT 1 FROM project_order_items source
           WHERE source.order_id=o.id AND source.quantity>COALESCE((
@@ -206,6 +242,20 @@ router.patch('/:id/items/:itemId/quantity',async(req,res,next)=>{
     const allocated=Number(allocation.rows[0].allocated_quantity),completed=Number(allocation.rows[0].completed_quantity);
     if(quantity<allocated)throw fail(`Không thể giảm dưới ${allocated} ${item.rows[0].unit} đã cấp vào Lệnh SX. Hãy sửa hoặc hủy Lệnh chưa hoàn thành trước.`,409);
     if(quantity<completed)throw fail(`Không thể giảm dưới ${completed} ${item.rows[0].unit} đã hoàn thành`,409);
+    const fulfillment=await db.query(
+      `SELECT execution_type,COALESCE(SUM(link.planned_quantity),0) planned,
+        COALESCE(SUM(link.completed_quantity),0) completed
+       FROM task_order_fulfillment_items link
+       JOIN tasks task ON task.id=link.task_id
+       WHERE link.order_item_id=$1 AND task.deleted_at IS NULL AND task.status NOT IN ('Hủy','Lưu trữ')
+       GROUP BY execution_type`,
+      [req.params.itemId]
+    );
+    for(const row of fulfillment.rows){
+      const label=row.execution_type==='DELIVERY'?'Giao hàng':'Lắp đặt';
+      if(quantity<Number(row.planned))throw fail(`Không thể giảm dưới ${row.planned} ${item.rows[0].unit} đã lập nhiệm vụ ${label}. Hãy sửa hoặc hủy nhiệm vụ trước.`,409);
+      if(quantity<Number(row.completed))throw fail(`Không thể giảm dưới ${row.completed} ${item.rows[0].unit} đã hoàn thành ${label}`,409);
+    }
     const updated=await db.query(`UPDATE project_order_items SET quantity=$1 WHERE id=$2 RETURNING *`,[quantity,req.params.itemId]);
     await insertChangeLog(db,{orderId:req.params.id,orderItemId:req.params.itemId,changeType:'QUANTITY_CHANGE',reason:req.body.reason,
       beforeData:item.rows[0],afterData:updated.rows[0],userId:req.user?.id||1});
@@ -244,6 +294,11 @@ router.put('/:id', async (req, res, next) => {
     const current=await db.query('SELECT * FROM project_orders WHERE id=$1 FOR UPDATE',[req.params.id]);
     if(!current.rowCount) throw fail('Không tìm thấy đơn hàng',404);
     if(current.rows[0].status!=='NOT_STARTED') throw fail('Chỉ đơn hàng Chưa sản xuất mới được sửa',409);
+    const fulfillment=await db.query(
+      `SELECT 1 FROM tasks WHERE order_id=$1 AND deleted_at IS NULL AND status NOT IN ('Hủy','Lưu trữ') LIMIT 1`,
+      [req.params.id]
+    );
+    if(fulfillment.rowCount)throw fail('Đơn hàng đã có nhiệm vụ Giao hàng/Lắp đặt. Chỉ được thêm hạng mục hoặc điều chỉnh số lượng có ghi Nhật ký.',409);
     const items=normalizeItems(req.body.items);
     await db.query(`UPDATE project_orders SET project_id=$1,order_date=$2,expected_delivery_date=$3,notes=$4 WHERE id=$5`,
       [req.body.project_id,current.rows[0].order_date?req.body.order_date||current.rows[0].order_date:req.body.order_date,req.body.expected_delivery_date||null,req.body.notes||null,req.params.id]);

@@ -36,8 +36,16 @@ async function boardDetail(client, boardId) {
             AND live_task.deleted_at IS NULL AND COALESCE(live_task.is_archived,false)=false
             AND live_task.status NOT IN ('Hủy','Lưu trữ')
             AND live_project.deleted_at IS NULL AND live_project.status NOT IN ('Hủy','Lưu trữ')
-            AND COALESCE(live_assignment.start_date,live_task.start_date,live_project.start_date,live_board.board_date)<=live_board.board_date
-            AND COALESCE(live_assignment.end_date,live_task.end_date,live_project.end_date,live_board.board_date)>=live_board.board_date
+            AND (
+              EXISTS(SELECT 1 FROM task_assignment_work_days live_day
+                WHERE live_day.task_assignment_id=live_assignment.id AND live_day.work_date=live_board.board_date)
+              OR (
+                NOT EXISTS(SELECT 1 FROM task_assignment_work_days any_live_day
+                  WHERE any_live_day.task_assignment_id=live_assignment.id)
+                AND COALESCE(live_assignment.start_date,live_task.start_date,live_project.start_date,live_board.board_date)<=live_board.board_date
+                AND COALESCE(live_assignment.end_date,live_task.end_date,live_project.end_date,live_board.board_date)>=live_board.board_date
+              )
+            )
         )
       ) GROUP BY i.id,p.project_code,p.project_name,t.task_code,t.task_name
       ORDER BY i.start_time NULLS LAST,i.sort_order,i.id`, [boardId]),
@@ -59,8 +67,16 @@ async function syncTaskAssignments(client, board) {
           AND t.deleted_at IS NULL AND COALESCE(t.is_archived,false)=false
           AND t.status NOT IN ('Hủy','Lưu trữ')
           AND p.deleted_at IS NULL AND p.status NOT IN ('Hủy','Lưu trữ')
-          AND COALESCE(ta.start_date,t.start_date,p.start_date,$2::date)<=$2::date
-          AND COALESCE(ta.end_date,t.end_date,p.end_date,$2::date)>=$2::date
+          AND (
+            EXISTS(SELECT 1 FROM task_assignment_work_days work_day
+              WHERE work_day.task_assignment_id=ta.id AND work_day.work_date=$2::date)
+            OR (
+              NOT EXISTS(SELECT 1 FROM task_assignment_work_days any_work_day
+                WHERE any_work_day.task_assignment_id=ta.id)
+              AND COALESCE(ta.start_date,t.start_date,p.start_date,$2::date)<=$2::date
+              AND COALESCE(ta.end_date,t.end_date,p.end_date,$2::date)>=$2::date
+            )
+          )
       ) RETURNING stale.id`,[board.id,board.board_date]);
   const result = await client.query(`WITH source AS (
       SELECT ta.id task_assignment_id,ta.employee_id,t.id task_id,t.project_id,t.task_name,t.task_code,t.progress,
@@ -74,8 +90,16 @@ async function syncTaskAssignments(client, board) {
       WHERE ta.is_active=TRUE AND COALESCE(t.is_archived,FALSE)=FALSE
         AND t.status NOT IN ('Hủy','Lưu trữ') AND p.deleted_at IS NULL
         AND p.status NOT IN ('Hủy','Lưu trữ')
-        AND COALESCE(ta.start_date,t.start_date,p.start_date,$2::date) <= $2::date
-        AND COALESCE(ta.end_date,t.end_date,p.end_date,$2::date) >= $2::date
+        AND (
+          EXISTS(SELECT 1 FROM task_assignment_work_days work_day
+            WHERE work_day.task_assignment_id=ta.id AND work_day.work_date=$2::date)
+          OR (
+            NOT EXISTS(SELECT 1 FROM task_assignment_work_days any_work_day
+              WHERE any_work_day.task_assignment_id=ta.id)
+            AND COALESCE(ta.start_date,t.start_date,p.start_date,$2::date) <= $2::date
+            AND COALESCE(ta.end_date,t.end_date,p.end_date,$2::date) >= $2::date
+          )
+        )
     ), upserted AS (
       INSERT INTO shopfloor_work_board_items
         (board_id,project_id,task_id,title,priority,status,progress,sort_order,source_type,source_task_assignment_id)

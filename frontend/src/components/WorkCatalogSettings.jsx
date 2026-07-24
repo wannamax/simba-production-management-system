@@ -101,12 +101,12 @@ export default function WorkCatalogSettings() {
   ];
   const itemColumns=[
     {title:'Nhóm',dataIndex:'group_name',width:130,render:(value,record)=><Tag color={record.group_color||'blue'}>{value}</Tag>},
-    {title:'Công việc',dataIndex:'name',width:180},
+    {title:'Công việc',dataIndex:'name',width:220,render:(value,record)=><Space>{value}{record.is_system&&<Tag color="gold">Hệ thống</Tag>}</Space>},
     {title:'Quy trình thực thi',dataIndex:'execution_type',width:150,render:value=>value?<Tag color={value==='DELIVERY'?'cyan':'purple'}>{value==='DELIVERY'?'Giao hàng':'Lắp đặt'}</Tag>:'-'},
     {title:'Loại dự án áp dụng',dataIndex:'project_types',render:values=>values?.length?<Space size={[0,4]} wrap>{values.map(value=><Tag key={value}>{value}</Tag>)}</Space>:<Tag color="blue">Tất cả</Tag>},
     {title:'Đã dùng',dataIndex:'usage_count',width:80,align:'center'},
     {title:'Trạng thái',dataIndex:'is_active',width:110,render:value=><Tag color={value?'green':'default'}>{value?'Hoạt động':'Ngừng dùng'}</Tag>},
-    {title:'Thao tác',width:110,render:(_,record)=>actionButtons(record,openItem,removeItem)},
+    {title:'Thao tác',width:110,render:(_,record)=>record.is_system?<Tag color="gold">Ghi cứng</Tag>:actionButtons(record,openItem,removeItem)},
   ];
   const roleColumns=[
     {title:'Mã',dataIndex:'code',width:160},
@@ -120,7 +120,7 @@ export default function WorkCatalogSettings() {
 
   return <div>
     <Alert showIcon type="info" message="Loại dự án → Nhóm công việc → Công việc"
-      description="Công việc phải thuộc một Nhóm và có thể áp dụng cho một số hoặc tất cả Loại dự án. Khi phân công, danh sách luôn được tải lại theo Loại dự án hiện tại." style={{marginBottom:16}}/>
+      description="Giám sát & Quản lý, Giao hàng và Lắp đặt là Công việc hệ thống được ghi cứng. Các công việc này luôn hoạt động và không thể chỉnh sửa hoặc xóa." style={{marginBottom:16}}/>
     <Row gutter={[16,16]}>
       <Col xs={24} xl={10}><Card title="Nhóm công việc" extra={<Space><Button icon={<ReloadOutlined/>} onClick={load}/><Button type="primary" icon={<PlusOutlined/>} onClick={()=>openGroup()}>Thêm nhóm</Button></Space>}>
         <Table rowKey="id" loading={loading} dataSource={groups} columns={groupColumns} pagination={false} scroll={{x:700}}/>
@@ -140,7 +140,6 @@ export default function WorkCatalogSettings() {
         <Form.Item name="code" label="Mã nhóm"><Input disabled={!!editingGroup} placeholder="Tự tạo từ tên nếu để trống"/></Form.Item>
         <Form.Item name="name" label="Tên nhóm" rules={[{required:true,message:'Nhập tên nhóm'}]}><Input placeholder="Văn phòng, Sản xuất, Thi công..."/></Form.Item>
         <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2}/></Form.Item>
-        <Form.Item name="execution_type" label="Quy trình thực thi"><Select allowClear placeholder="Công việc thông thường" options={[{value:'DELIVERY',label:'Giao hàng — có danh sách địa điểm'},{value:'INSTALLATION',label:'Lắp đặt — có danh sách địa điểm'}]}/></Form.Item>
         <Row gutter={16}><Col span={12}><Form.Item name="sort_order" label="Thứ tự"><InputNumber min={0} style={{width:'100%'}}/></Form.Item></Col><Col span={12}><Form.Item name="color" label="Màu hiển thị"><Input placeholder="blue hoặc #1677ff"/></Form.Item></Col></Row>
         <Form.Item name="is_active" label="Đang sử dụng" valuePropName="checked"><Switch/></Form.Item>
         <Button type="primary" htmlType="submit">Lưu nhóm</Button>
@@ -153,6 +152,7 @@ export default function WorkCatalogSettings() {
         <Col span={12}><Form.Item name="code" label="Mã công việc"><Input disabled={!!editingItem} placeholder="Tự tạo từ tên nếu để trống"/></Form.Item></Col></Row>
         <Form.Item name="name" label="Tên công việc" rules={[{required:true,message:'Nhập tên công việc'}]}><Input placeholder="Thiết kế, Khung hộp đèn, Sơn..."/></Form.Item>
         <Form.Item name="project_types" label="Áp dụng cho Loại dự án" rules={[{required:true,type:'array',min:1,message:'Chọn Loại dự án hoặc Tất cả'}]}><Select mode="multiple" showSearch optionFilterProp="label" onChange={changeProjectTypes} options={[{value:ALL_PROJECT_TYPES,label:'Tất cả loại dự án'},...projectTypes.map(x=>({value:x.name,label:x.name}))]}/></Form.Item>
+        <Form.Item name="execution_type" label="Quy trình thực thi"><Select allowClear placeholder="Công việc thông thường" options={[{value:'DELIVERY',label:'Giao hàng — có danh sách địa chỉ'},{value:'INSTALLATION',label:'Lắp đặt — có danh sách địa chỉ'}]}/></Form.Item>
         <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2}/></Form.Item>
         <Form.Item name="sort_order" label="Thứ tự"><InputNumber min={0} style={{width:'100%'}}/></Form.Item>
         <Form.Item name="is_active" label="Đang sử dụng" valuePropName="checked"><Switch/></Form.Item>
