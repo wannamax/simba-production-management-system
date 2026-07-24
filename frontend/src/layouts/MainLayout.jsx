@@ -493,7 +493,7 @@ const getOpenKeys = () => {
           }}
         >
           <Text type="secondary" style={{ fontSize: 12 }}>
-            Simba PMS - Version: 2.6.0-J
+            Simba PMS - Version: 2.6.0-K
           </Text>
         </div>
       </Layout>

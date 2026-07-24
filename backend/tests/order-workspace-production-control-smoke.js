@@ -9,7 +9,7 @@ async function request(path,options={}){
 (async()=>{
   const stamp=Date.now();let projectId,processId;
   try{
-    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-J');
+    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-K');
     const meta=await request('/production-workflows/meta');const projectType=meta.body.data.project_types[0],workItem=meta.body.data.work_items[0];assert.ok(projectType&&workItem);
     const project=await request('/projects',{method:'POST',body:JSON.stringify({project_name:`Order Workspace I ${stamp}`,project_type:projectType,start_date:'2026-07-22',end_date:'2026-08-22',priority:'Trung bình'})});
     assert.equal(project.status,201,JSON.stringify(project.body));projectId=project.body.data.id;
@@ -26,6 +26,18 @@ async function request(path,options={}){
     assert.equal(Number(productionList.body.data[0].items[0].order_item_id),Number(itemId));
     const partialOrderList=await request(`/orders?project_id=${projectId}`);assert.equal(partialOrderList.status,200);
     assert.equal(partialOrderList.body.data.find(row=>Number(row.id)===Number(orderId)).has_remaining_quantity,true);
+
+    const direct=await request('/production-workflows/orders/direct',{method:'POST',body:JSON.stringify({order_id:orderId,name:'Hoàn thiện trực tiếp',planned_start_date:'2026-07-22',planned_end_date:'2026-07-24',notes:'Không dùng quy trình mẫu'})});
+    assert.equal(direct.status,201,JSON.stringify(direct.body));assert.equal(direct.body.data.order_type,'DIRECT');
+    assert.equal(direct.body.data.process_id,null);assert.equal(direct.body.data.stages.length,1);
+    const directStageId=direct.body.data.direct_stage_id;assert.equal(Number(direct.body.data.stages[0].id),Number(directStageId));
+    const directContext=await request(`/production-workflows/context/${orderId}`);assert.equal(directContext.status,200);
+    const employeeResponse=await request('/employees?limit=1000');const employee=employeeResponse.body.data.find(row=>row.status==='Hoạt động');assert.ok(employee);
+    const role=directContext.body.data.roles[0].name;
+    const directTask=await request('/tasks/batch',{method:'POST',body:JSON.stringify({project_id:projectId,task_source_type:'PRODUCTION_STAGE',production_stage_instance_id:directStageId,work_item_ids:[workItem.id],assignments:[{employee_id:employee.id,role_in_task:role,work_dates:['2026-07-22']}]} )});
+    assert.equal(directTask.status,201,JSON.stringify(directTask.body));
+    const directDetail=await request(`/production-workflows/orders/${direct.body.data.id}`);assert.equal(directDetail.status,200);assert.equal(directDetail.body.data.stages[0].works.length,1);
+    assert.equal(Number(directDetail.body.data.stages[0].works[0].id),Number(directTask.body.data[0].id));
 
     const workspace=await request(`/orders/${orderId}`);assert.equal(workspace.status,200);assert.equal(workspace.body.data.items.length,2);
     assert.equal(workspace.body.data.production_orders.length,1);assert.equal(workspace.body.data.production_orders[0].items.length,1);
@@ -49,7 +61,7 @@ async function request(path,options={}){
     const output=await request(`/production-workflows/stage-items/${stageItem.id}/output`,{method:'POST',body:JSON.stringify({output_date:'2026-07-23',good_quantity:1,defect_quantity:0,rework_quantity:0})});assert.equal(output.status,200,JSON.stringify(output.body));
     const blockedCancel=await request(`/production-plans/groups/${production.id}`,{method:'DELETE',body:JSON.stringify({reason:'Không được trả lại sản lượng đã ghi'})});assert.equal(blockedCancel.status,409);assert.match(blockedCancel.body.message,/đã ghi nhận sản lượng/i);
     const hierarchy=await request(`/tasks?project_id=${projectId}`);assert.equal(hierarchy.status,200);assert.ok(hierarchy.body.production_stages.length);assert.equal(hierarchy.body.production_stages[0].production_items.length,1);
-    console.log(`Order Workspace & Production Order Control 2.6.0-J smoke test passed (${order.body.data.order_code})`);
+    console.log(`Order Workspace & Production Order Control 2.6.0-K smoke test passed (${order.body.data.order_code})`);
   }finally{
     if(projectId)await request(`/projects/${projectId}`,{method:'DELETE'}).catch(()=>{});
     if(processId)await request(`/production-workflows/processes/${processId}`,{method:'DELETE'}).catch(()=>{});

@@ -34,7 +34,7 @@ async function getBalance(materialId, warehouseId) {
 (async()=>{
   const health=await request('/health');
   assert.equal(health.response.status,200,JSON.stringify(health.body));
-  assert.equal(health.body.version,'2.6.0-J');
+  assert.equal(health.body.version,'2.6.0-K');
 
   const meta=await request('/inventory/meta');
   assert.equal(meta.response.status,200,JSON.stringify(meta.body));
@@ -91,5 +91,5 @@ async function getBalance(materialId, warehouseId) {
   const exported=await fetch(`${api}/inventory/documents/${postedDocument.id}/export.xlsx`);
   assert.equal(exported.status,200); assert((exported.headers.get('content-type')||'').includes('spreadsheetml'));
 
-  console.log('Inventory Transactions smoke test passed on 2.6.0-J');
+  console.log('Inventory Transactions smoke test passed on 2.6.0-K');
 })().catch(error=>{console.error(error);process.exit(1);});

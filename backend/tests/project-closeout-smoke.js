@@ -17,7 +17,7 @@ async function request(path, options = {}) {
 (async () => {
   const health = await request('/health');
   assert.equal(health.response.status, 200);
-    assert.equal(health.body.version, '2.6.0-J');
+    assert.equal(health.body.version, '2.6.0-K');
 
   const stamp = Date.now();
   const created = await request('/projects', {

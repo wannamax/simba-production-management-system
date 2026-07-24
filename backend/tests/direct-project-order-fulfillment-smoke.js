@@ -20,7 +20,7 @@ async function request(path, options = {}) {
   try {
     const health = await request('/health');
     assert.equal(health.response.status, 200);
-    assert.equal(health.body.version, '2.6.0-J');
+    assert.equal(health.body.version, '2.6.0-K');
 
     const [workflowMeta, employees] = await Promise.all([
       request('/production-workflows/meta'),
@@ -146,7 +146,7 @@ async function request(path, options = {}) {
     deliveryTaskId = null;
     installationTaskId = null;
 
-    console.log('Direct Project Tasks & Order Fulfillment 2.6.0-J smoke test passed');
+    console.log('Direct Project Tasks & Order Fulfillment 2.6.0-K smoke test passed');
   } finally {
     if (deliveryTaskId) await request(`/tasks/${deliveryTaskId}`, { method: 'DELETE' }).catch(() => {});
     if (installationTaskId) await request(`/tasks/${installationTaskId}`, { method: 'DELETE' }).catch(() => {});

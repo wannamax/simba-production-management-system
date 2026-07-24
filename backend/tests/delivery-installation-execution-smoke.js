@@ -24,7 +24,7 @@ async function download(path) {
   let taskId;
   try {
     const health = await request('/health');
-    assert.equal(health.body.version, '2.6.0-J');
+    assert.equal(health.body.version, '2.6.0-K');
 
     const [customers, employees, provinces] = await Promise.all([
       request('/customers?limit=1000'),
@@ -153,7 +153,7 @@ async function download(path) {
     const projectExecution = await request(`/task-execution/projects/${projectId}`);
     assert.equal(projectExecution.response.status, 200);
     assert.equal(projectExecution.body.data[0].ready_for_task_completion, true);
-    console.log('Delivery & Installation Execution 2.6.0-J smoke test passed');
+    console.log('Delivery & Installation Execution 2.6.0-K smoke test passed');
   } finally {
     if (taskId) await request(`/tasks/${taskId}`, { method: 'DELETE' }).catch(() => {});
     if (projectId) await request(`/projects/${projectId}`, { method: 'DELETE' }).catch(() => {});

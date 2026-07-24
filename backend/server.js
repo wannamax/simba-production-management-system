@@ -115,7 +115,7 @@ const server = app.listen(PORT, () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
 ║                                                        ║
-║   🚀 Simba PMS API — Version 2.6.0-J                  ║
+║   🚀 Simba PMS API — Version 2.6.0-K                  ║
 ║                                                        ║
 ║   Port: ${PORT}                                           ║
 ║   Environment: ${process.env.NODE_ENV || 'development'}                              ║

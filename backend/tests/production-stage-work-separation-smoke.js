@@ -9,7 +9,7 @@ async function request(path,options={}){
 (async()=>{
   const stamp=Date.now();let projectId,processId;
   try{
-    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-J');
+    const health=await request('/health');assert.equal(health.status,200);assert.equal(health.body.version,'2.6.0-K');
     const meta=await request('/production-workflows/meta');const projectType=meta.body.data.project_types[0],workItem=meta.body.data.work_items[0];
     assert.ok(projectType&&workItem);
     const employees=await request('/employees?limit=1000');const employee=employees.body.data.find(row=>row.status==='Hoạt động')||employees.body.data[0];assert.ok(employee);
@@ -54,7 +54,7 @@ async function request(path,options={}){
     assert.equal(cancelled.status,200,JSON.stringify(cancelled.body));
     const restored=await request(`/orders/${orderId}`);assert.equal(restored.body.data.status,'NOT_STARTED');assert.equal(Number(restored.body.data.items[0].allocated_quantity),0);
     const cancelledPlan=await request(`/production-plans/${plan.body.data.id}`);assert.equal(cancelledPlan.body.data.status,'CANCELLED');
-    console.log(`Production Stage & Work Separation 2.6.0-J smoke test passed (${plan.body.data.plan_code})`);
+    console.log(`Production Stage & Work Separation 2.6.0-K smoke test passed (${plan.body.data.plan_code})`);
   }finally{
     if(projectId)await request(`/projects/${projectId}`,{method:'DELETE'}).catch(()=>{});
     if(processId)await request(`/production-workflows/processes/${processId}`,{method:'DELETE'}).catch(()=>{});

@@ -17,7 +17,7 @@ async function request(path, options = {}) {
   try {
     const health = await request('/health');
     assert.equal(health.status, 200);
-    assert.equal(health.body.version, '2.6.0-J');
+    assert.equal(health.body.version, '2.6.0-K');
 
     const meta = await request('/production-workflows/meta');
     const projectType = meta.body.data.project_types[0];
@@ -109,7 +109,7 @@ async function request(path, options = {}) {
     assert.equal((await request(`/orders/${orderId}`)).status, 404);
     assert.equal((await request(`/tasks/${work.body.data.id}`)).status, 404);
 
-    console.log(`Order cancel/delete 2.6.0-J smoke test passed (${order.body.data.order_code})`);
+    console.log(`Order cancel/delete 2.6.0-K smoke test passed (${order.body.data.order_code})`);
   } finally {
     if (projectId) await request(`/projects/${projectId}`, { method: 'DELETE' }).catch(() => {});
     if (processId) await request(`/production-workflows/processes/${processId}`, { method: 'DELETE' }).catch(() => {});

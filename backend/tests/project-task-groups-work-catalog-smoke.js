@@ -19,7 +19,7 @@ async function request(path, options = {}) {
   try {
     const health = await request('/health');
     assert.equal(health.response.status, 200);
-    assert.equal(health.body.version, '2.6.0-J');
+    assert.equal(health.body.version, '2.6.0-K');
 
     const protectedItems = await request('/work-catalog/items?include_inactive=true');
     for (const code of ['SUPERVISION','DELIVERY','ON_SITE_INSTALLATION']) {

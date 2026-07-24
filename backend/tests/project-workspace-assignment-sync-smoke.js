@@ -19,7 +19,7 @@ async function request(path, options = {}) {
   let productId;
   try {
     const health = await request('/health');
-    assert.equal(health.body.version,'2.6.0-J');
+    assert.equal(health.body.version,'2.6.0-K');
 
     const role = await request('/work-catalog/roles', {
       method:'POST',
@@ -100,7 +100,7 @@ async function request(path, options = {}) {
     assert.equal(removed.response.status,200,JSON.stringify(removed.body));
     assignmentId = null;
 
-    console.log('Project Workspace & Assignment Sync 2.6.0-J smoke test passed');
+    console.log('Project Workspace & Assignment Sync 2.6.0-K smoke test passed');
   } finally {
     if (productId && projectId) await request(`/projects/${projectId}/products/${productId}`, { method:'DELETE' }).catch(()=>{});
     if (taskId) await request(`/tasks/${taskId}`, { method:'DELETE' }).catch(()=>{});

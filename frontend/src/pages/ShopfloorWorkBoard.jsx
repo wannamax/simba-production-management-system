@@ -216,7 +216,7 @@ export default function ShopfloorWorkBoard() {
 
   return <div>
     <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 18 }} wrap>
-      <div><Title level={2} style={{ margin: 0 }}>Bảng điều hành xưởng</Title><Text type="secondary">2.6.0-J — Tự động từ ngày làm việc đã phân công · Theo người và giờ · Nhật ký Dự án</Text></div>
+      <div><Title level={2} style={{ margin: 0 }}>Bảng điều hành xưởng</Title><Text type="secondary">2.6.0-K — Tự động từ ngày làm việc đã phân công · Theo người và giờ · Nhật ký Dự án</Text></div>
       <Space>
         <DatePicker allowClear={false} value={date} format="DD/MM/YYYY" onChange={value => { setDate(value); setBoard(null); openDate(value); }} />
         <Button icon={<PlusOutlined />} onClick={() => { boardForm.setFieldsValue({ board_date: date, shift_code: 'SHIFT_2', shift_name: 'Ca bổ sung', shift_start: dayjs('16:30', 'HH:mm'), shift_end: dayjs('22:00', 'HH:mm'), workshop: 'Xưởng chính' }); setBoardModal(true); }}>Thêm ca</Button>
