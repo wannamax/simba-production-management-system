@@ -190,18 +190,56 @@ router.put('/items/:id', async (req, res, next) => {
 });
 
 router.delete('/items/:id', async (req, res, next) => {
+  const client = await pool.connect();
   try {
-    const current = await pool.query('SELECT code,is_system FROM work_items WHERE id=$1', [req.params.id]);
-    if (!current.rowCount) return res.status(404).json({ success:false, message:'Không tìm thấy công việc' });
+    await client.query('BEGIN');
+    const current = await client.query('SELECT code,is_system FROM work_items WHERE id=$1 FOR UPDATE', [req.params.id]);
+    if (!current.rowCount) throw Object.assign(new Error('Không tìm thấy công việc'), { status:404 });
     if (current.rows[0].is_system || SYSTEM_WORK_ITEM_CODES.has(current.rows[0].code)) {
-      return res.status(409).json({ success:false, message:'Công việc hệ thống được ghi cứng và không thể xóa' });
+      throw Object.assign(new Error('Công việc hệ thống được ghi cứng và không thể xóa'), { status:409 });
     }
-    const used = await pool.query('SELECT count(*)::int count FROM tasks WHERE work_item_id=$1', [req.params.id]);
-    if (used.rows[0].count) return res.status(409).json({ success:false, message:'Công việc đã được dùng trong Task. Hãy chuyển sang Không hoạt động.' });
-    const result = await pool.query('DELETE FROM work_items WHERE id=$1 RETURNING id', [req.params.id]);
-    if (!result.rowCount) return res.status(404).json({ success:false, message:'Không tìm thấy công việc' });
-    res.json({ success:true, message:'Đã xóa công việc' });
-  } catch (error) { next(error); }
+
+    const dependencies = await client.query(
+      `SELECT
+        (SELECT count(*)::int FROM production_process_stages WHERE work_item_id=$1) AS process_stage_count,
+        (SELECT count(*)::int FROM production_stage_instances WHERE work_item_id=$1) AS production_stage_count`,
+      [req.params.id]
+    );
+    const { process_stage_count: processStageCount, production_stage_count: productionStageCount } = dependencies.rows[0];
+    if (processStageCount || productionStageCount) {
+      throw Object.assign(
+        new Error('Công việc đã được dùng trong quy trình hoặc kế hoạch sản xuất. Hãy chuyển sang Không hoạt động.'),
+        { status:409 }
+      );
+    }
+
+    // Tasks retain their own name and history. Clear only the optional catalog link
+    // so a deleted catalog item never blocks test-data cleanup or catalog maintenance.
+    const clearedTasks = await client.query(
+      `UPDATE tasks SET work_item_id=NULL,updated_at=NOW()
+       WHERE work_item_id=$1
+       RETURNING id`,
+      [req.params.id]
+    );
+    const result = await client.query('DELETE FROM work_items WHERE id=$1 RETURNING id', [req.params.id]);
+    if (!result.rowCount) throw Object.assign(new Error('Không tìm thấy công việc'), { status:404 });
+    await client.query('COMMIT');
+    const clearedTaskCount = clearedTasks.rowCount;
+    res.json({
+      success:true,
+      data:{ cleared_task_count:clearedTaskCount },
+      message:clearedTaskCount
+        ? `Đã xóa công việc và gỡ liên kết khỏi ${clearedTaskCount} Task`
+        : 'Đã xóa công việc',
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.status) return res.status(error.status).json({ success:false, message:error.message });
+    if (error.code === '23503') {
+      return res.status(409).json({ success:false, message:'Công việc đang được dữ liệu sản xuất sử dụng. Hãy chuyển sang Không hoạt động.' });
+    }
+    next(error);
+  } finally { client.release(); }
 });
 
 router.get('/roles', async (req, res, next) => {
